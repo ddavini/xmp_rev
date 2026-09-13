@@ -9,6 +9,7 @@
 #include <fstream>
 #include <functional>
 #include <iostream>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -102,6 +103,67 @@ SDL_Texture* RenderTextTexture(SDL_Renderer* renderer, const gfx::BitmapFont& fo
     font.DrawText(canvas, 0, 0, text, /*scale=*/1, fieldWidth);
     return UploadTexture(renderer, canvas);
 }
+
+// RenderTextTexture (rasterize + upload) redone every single frame for text
+// that usually hasn't changed since the last frame - duration/freq/volume
+// readouts tick at most once a second, EQ band/preset labels and the
+// playlist's static header never change at all - was real, measurable idle
+// CPU (found via a live `sample` profile: with the render loop's frame-rate
+// cap already in place, most of the remaining per-frame cost was still text
+// texture churn). One of these per on-screen text field, kept alive for the
+// field's lifetime rather than recreated each call.
+struct CachedTextTexture {
+    SDL_Texture* tex = nullptr;
+    std::string lastText;
+    int lastFieldWidth = -1;
+
+    SDL_Texture* Get(SDL_Renderer* renderer, const gfx::BitmapFont& font, std::string_view text, int fieldWidth) {
+        if (!tex || lastFieldWidth != fieldWidth || lastText != text) {
+            if (tex) SDL_DestroyTexture(tex);
+            tex = RenderTextTexture(renderer, font, text, fieldWidth);
+            lastText.assign(text);
+            lastFieldWidth = fieldWidth;
+        }
+        return tex;
+    }
+};
+
+// Snapshot of everything a secondary window's frame actually depends on,
+// compared against the previous frame's snapshot in the main loop. Even
+// after RenderTextTexture calls are cached (see above), SDL_RenderPresent
+// itself has a fixed per-call cost on this platform - it re-uploads the
+// entire window surface to a Metal-backed texture regardless of whether any
+// pixel actually changed (confirmed via a live `sample` profile) - so the
+// only way to avoid paying it every frame is to skip the draw+present pair
+// outright when nothing changed. Playlist/EQ/Info/About have no continuous
+// animation of their own (unlike Main's spectrum/VU meters), so while idle
+// almost every frame is an exact repeat of the last.
+struct PlaylistFrameKey {
+    uint64_t playlistGen = 0;
+    int currentIndex = -2;
+    int selected = -2;
+    int scrollOffset = -1;
+    int pressedButton = -2;
+    unsigned sampleRate = 0;
+    unsigned channels = 0;
+    bool operator==(const PlaylistFrameKey&) const = default;
+};
+
+struct EqFrameKey {
+    std::array<int, audio::Equalizer::kBands> bands{};
+    int pressedSlider = -2;
+    int currentPreset = -2;
+    bool operator==(const EqFrameKey&) const = default;
+};
+
+struct InfoFrameKey {
+    uint64_t playlistGen = 0;
+    int currentIndex = -2;
+    unsigned channels = 0;
+    unsigned sampleRate = 0;
+    double durationSeconds = -1.0;
+    bool operator==(const InfoFrameKey&) const = default;
+};
 
 // Renders a bar whose bottom `litFraction` is filled with a green->amber
 // vertical gradient (green at the base, amber at the tip) and the rest left
@@ -1078,6 +1140,9 @@ int main(int argc, char** argv) {
         return title.empty() ? BaseName(path) : title;
     };
 
+    CachedTextTexture marqueeTextCache, durationTextCache, freqTextCache, volTextCache, bitRateTextCache;
+    CachedTextTexture plToggleTextCache, eqToggleTextCache, visTooltipTextCache;
+
     auto drawFrame = [&]() {
         SDL_SetRenderDrawColor(renderer, 0x10, 0x12, 0x09, 255);
         SDL_RenderClear(renderer);
@@ -1098,7 +1163,8 @@ int main(int argc, char** argv) {
             // window is merely minimized as part of the cascade below, so
             // using it here would dim these buttons during a minimize
             // even though the user never asked to hide either window.
-            auto drawToggle = [&](int bx, int by, int bw, int bh, const char* label, bool active) {
+            auto drawToggle = [&](int bx, int by, int bw, int bh, const char* label, bool active,
+                                   CachedTextTexture& labelCache) {
                 // TODO: "the PL and EQ buttons are ugly ... uniform ...
                 // green instead of black where the letters are" - fill was
                 // previously near-black (0x14-0x15 range) in both states,
@@ -1114,12 +1180,11 @@ int main(int argc, char** argv) {
                 SDL_SetRenderDrawColor(renderer, active ? 0x3d : 0x2a, active ? 0xff : 0x7a, active ? 0x74 : 0x3a,
                                         255);
                 SDL_RenderDrawRect(renderer, &bg);
-                SDL_Texture* t = RenderTextTexture(renderer, font, label, 2 * gfx::BitmapFont::kCellW);
-                DrawTextureAt(renderer, t, bx + (bw - 2 * gfx::BitmapFont::kCellW) / 2, by + (bh - gfx::BitmapFont::kCellH) / 2);
-                SDL_DestroyTexture(t);
+                DrawTextureAt(renderer, labelCache.Get(renderer, font, label, 2 * gfx::BitmapFont::kCellW),
+                              bx + (bw - 2 * gfx::BitmapFont::kCellW) / 2, by + (bh - gfx::BitmapFont::kCellH) / 2);
             };
-            drawToggle(kPlToggleX, kPlToggleY, kPlToggleW, kPlToggleH, "PL", plUserVisible);
-            drawToggle(kEqToggleX, kEqToggleY, kEqToggleW, kEqToggleH, "EQ", eqUserVisible);
+            drawToggle(kPlToggleX, kPlToggleY, kPlToggleW, kPlToggleH, "PL", plUserVisible, plToggleTextCache);
+            drawToggle(kEqToggleX, kEqToggleY, kEqToggleW, kEqToggleH, "EQ", eqUserVisible, eqToggleTextCache);
         }
 
         // lnSposta/lnSposta2: the green double-line "handle" strip under the
@@ -1148,9 +1213,8 @@ int main(int argc, char** argv) {
             } else if (playlist.empty()) {
                 marqueeText = "Nope";
             }
-            SDL_Texture* t = RenderTextTexture(renderer, font, marqueeText, kDisplayFieldW);
-            DrawTextureAt(renderer, t, kMarqueeX, kMarqueeY);
-            SDL_DestroyTexture(t);
+            DrawTextureAt(renderer, marqueeTextCache.Get(renderer, font, marqueeText, kDisplayFieldW), kMarqueeX,
+                          kMarqueeY);
         }
         DrawTextureAt(renderer, texStatus, kStatusX, kStatusY);
 
@@ -1218,16 +1282,12 @@ int main(int argc, char** argv) {
             char buf[16];
             const int posSec = trackOpen ? static_cast<int>(engine.positionSeconds()) : 0;
             std::snprintf(buf, sizeof(buf), "%02d:%02d", posSec / 60, posSec % 60);
-            SDL_Texture* t = RenderTextTexture(renderer, font, buf, kDurationW);
-            DrawTextureAt(renderer, t, kDurationX, kDurationY);
-            SDL_DestroyTexture(t);
+            DrawTextureAt(renderer, durationTextCache.Get(renderer, font, buf, kDurationW), kDurationX, kDurationY);
         }
         {
             char buf[16] = "44kHz";
             if (trackOpen) std::snprintf(buf, sizeof(buf), "%ukHz", engine.sampleRate() / 1000);
-            SDL_Texture* t = RenderTextTexture(renderer, font, buf, kFreqW);
-            DrawTextureAt(renderer, t, kFreqX, kFreqY);
-            SDL_DestroyTexture(t);
+            DrawTextureAt(renderer, freqTextCache.Get(renderer, font, buf, kFreqW), kFreqX, kFreqY);
         }
         {
             // Mirrors SettaIndicatoreModo's precedence: XSound (if the
@@ -1248,9 +1308,7 @@ int main(int argc, char** argv) {
             const int volPct = static_cast<int>(std::lround((engine.IsMuted() ? 0.0f : engine.Volume()) * 100.0f));
             char buf[16];
             std::snprintf(buf, sizeof(buf), "%03d", std::clamp(volPct, 0, 100));
-            SDL_Texture* t = RenderTextTexture(renderer, font, buf, kVolTextW);
-            DrawTextureAt(renderer, t, kVolTextX, kVolTextY);
-            SDL_DestroyTexture(t);
+            DrawTextureAt(renderer, volTextCache.Get(renderer, font, buf, kVolTextW), kVolTextX, kVolTextY);
         }
         {
             // TODO: "the Khz and bit rate labels are fake" - this used to
@@ -1264,9 +1322,7 @@ int main(int argc, char** argv) {
                                                          engine.durationSeconds());
                 if (kbps > 0) std::snprintf(buf, sizeof(buf), "%dk", kbps);
             }
-            SDL_Texture* t = RenderTextTexture(renderer, font, buf, kBitRateW);
-            DrawTextureAt(renderer, t, kBitRateX, kBitRateY);
-            SDL_DestroyTexture(t);
+            DrawTextureAt(renderer, bitRateTextCache.Get(renderer, font, buf, kBitRateW), kBitRateX, kBitRateY);
         }
 
         // xmSlide (volume): up arrow, thumb between two guide lines, down arrow
@@ -1628,9 +1684,7 @@ int main(int argc, char** argv) {
             SDL_RenderFillRect(renderer, &bg);
             SDL_SetRenderDrawColor(renderer, 0x3d, 0xff, 0x74, 255);
             SDL_RenderDrawRect(renderer, &bg);
-            SDL_Texture* t = RenderTextTexture(renderer, font, label, textW);
-            DrawTextureAt(renderer, t, bx + 3, by + 2);
-            SDL_DestroyTexture(t);
+            DrawTextureAt(renderer, visTooltipTextCache.Get(renderer, font, label, textW), bx + 3, by + 2);
         }
     };
 
@@ -1711,15 +1765,18 @@ int main(int argc, char** argv) {
         }
     };
 
+    CachedTextTexture plTitleTextCache;
+    std::array<CachedTextTexture, kPlVisibleRows> plRowTextCache;
+    CachedTextTexture plInfo0TextCache, plInfo1TextCache;
+
     auto drawPlaylistFrame = [&]() {
         SDL_SetRenderDrawColor(plRenderer, 0x10, 0x12, 0x09, 255);
         SDL_RenderClear(plRenderer);
         Bevel::Draw(plRenderer, 0, 0, kPlaylistWindowW, kPlaylistWindowH);
         DrawWindowHeader(plRenderer, kPlaylistWindowW, kDragStripH);
         {
-            SDL_Texture* t = RenderTextTexture(plRenderer, font, "PLAYLIST", 8 * gfx::BitmapFont::kCellW);
-            DrawTextureAt(plRenderer, t, 8, (kDragStripH - gfx::BitmapFont::kCellH) / 2);
-            SDL_DestroyTexture(t);
+            DrawTextureAt(plRenderer, plTitleTextCache.Get(plRenderer, font, "PLAYLIST", 8 * gfx::BitmapFont::kCellW),
+                          8, (kDragStripH - gfx::BitmapFont::kCellH) / 2);
         }
         DrawCloseIcon(plRenderer, kCloseX, kCloseY, kCloseSize);
 
@@ -1753,10 +1810,10 @@ int main(int argc, char** argv) {
             std::string label = formatDuration(getPlaylistDuration(static_cast<size_t>(idx))) + " - " +
                                  getPlaylistDisplayName(static_cast<size_t>(idx));
             if (static_cast<int>(label.size()) > maxChars) label = label.substr(0, static_cast<size_t>(maxChars));
-            SDL_Texture* t =
-                RenderTextTexture(plRenderer, font, label, static_cast<int>(label.size()) * gfx::BitmapFont::kCellW);
-            DrawTextureAt(plRenderer, t, kPlaylistListX + 2, ry + 1);
-            SDL_DestroyTexture(t);
+            DrawTextureAt(plRenderer,
+                          plRowTextCache[static_cast<size_t>(row)].Get(
+                              plRenderer, font, label, static_cast<int>(label.size()) * gfx::BitmapFont::kCellW),
+                          kPlaylistListX + 2, ry + 1);
         }
 
         SDL_SetRenderDrawColor(plRenderer, 0x23, 0x26, 0x20, 255);
@@ -1786,9 +1843,8 @@ int main(int argc, char** argv) {
 
             char line0[48];
             std::snprintf(line0, sizeof(line0), "%d TRACKS", static_cast<int>(playlist.size()));
-            SDL_Texture* t0 = RenderTextTexture(plRenderer, font, line0, kPlInfoW - 4);
-            DrawTextureAt(plRenderer, t0, kPlInfoX + 3, kPlInfoY0 + 3);
-            SDL_DestroyTexture(t0);
+            DrawTextureAt(plRenderer, plInfo0TextCache.Get(plRenderer, font, line0, kPlInfoW - 4), kPlInfoX + 3,
+                          kPlInfoY0 + 3);
 
             std::string line1 = "NO TRACK OPEN";
             if (engine.channels() != 0) {
@@ -1796,9 +1852,8 @@ int main(int argc, char** argv) {
                 std::snprintf(buf, sizeof(buf), "%uHZ %uCH", engine.sampleRate(), engine.channels());
                 line1 = buf;
             }
-            SDL_Texture* t1 = RenderTextTexture(plRenderer, font, line1, kPlInfoW - 4);
-            DrawTextureAt(plRenderer, t1, kPlInfoX + 3, kPlInfoY1 + 3);
-            SDL_DestroyTexture(t1);
+            DrawTextureAt(plRenderer, plInfo1TextCache.Get(plRenderer, font, line1, kPlInfoW - 4), kPlInfoX + 3,
+                          kPlInfoY1 + 3);
         }
     };
 
@@ -1958,15 +2013,19 @@ int main(int argc, char** argv) {
         }
     };
 
+    CachedTextTexture eqTitleTextCache;
+    std::array<CachedTextTexture, 3> eqLegendTextCache;
+    std::array<CachedTextTexture, audio::Equalizer::kBands> eqBandTextCache;
+    std::array<CachedTextTexture, 5> eqPresetTextCache;
+
     auto drawEqFrame = [&]() {
         SDL_SetRenderDrawColor(eqRenderer, 0x10, 0x12, 0x09, 255);
         SDL_RenderClear(eqRenderer);
         Bevel::Draw(eqRenderer, 0, 0, kEqWindowW, kEqWindowH);
         DrawWindowHeader(eqRenderer, kEqWindowW, kDragStripH);
         {
-            SDL_Texture* t = RenderTextTexture(eqRenderer, font, "EQUALIZER", 9 * gfx::BitmapFont::kCellW);
-            DrawTextureAt(eqRenderer, t, 8, (kDragStripH - gfx::BitmapFont::kCellH) / 2);
-            SDL_DestroyTexture(t);
+            DrawTextureAt(eqRenderer, eqTitleTextCache.Get(eqRenderer, font, "EQUALIZER", 9 * gfx::BitmapFont::kCellW),
+                          8, (kDragStripH - gfx::BitmapFont::kCellH) / 2);
         }
         DrawCloseIcon(eqRenderer, kCloseX, kCloseY, kCloseSize);
 
@@ -1978,11 +2037,11 @@ int main(int argc, char** argv) {
             const char* labels[3] = {"+12", "0", "-12"};
             const int ys[3] = {top - 3, (top + bottom) / 2 - 3, bottom - 3};
             for (int i = 0; i < 3; ++i) {
-                SDL_Texture* t = RenderTextTexture(eqRenderer, font, labels[i],
-                                                    static_cast<int>(std::string(labels[i]).size()) *
-                                                        gfx::BitmapFont::kCellW);
-                DrawTextureAt(eqRenderer, t, kEqLegendX, ys[i]);
-                SDL_DestroyTexture(t);
+                DrawTextureAt(eqRenderer,
+                              eqLegendTextCache[static_cast<size_t>(i)].Get(
+                                  eqRenderer, font, labels[i],
+                                  static_cast<int>(std::string(labels[i]).size()) * gfx::BitmapFont::kCellW),
+                              kEqLegendX, ys[i]);
             }
         }
 
@@ -2011,10 +2070,10 @@ int main(int argc, char** argv) {
             }
 
             const std::string label = kEqBandLabels[b];
-            SDL_Texture* t = RenderTextTexture(eqRenderer, font, label,
-                                                static_cast<int>(label.size()) * gfx::BitmapFont::kCellW);
-            DrawTextureAt(eqRenderer, t, sx + 1, kEqFreqLabelY);
-            SDL_DestroyTexture(t);
+            DrawTextureAt(eqRenderer,
+                          eqBandTextCache[static_cast<size_t>(b)].Get(
+                              eqRenderer, font, label, static_cast<int>(label.size()) * gfx::BitmapFont::kCellW),
+                          sx + 1, kEqFreqLabelY);
         }
 
         for (int i = 0; i < 5; ++i) {
@@ -2031,11 +2090,11 @@ int main(int argc, char** argv) {
             SDL_RenderDrawRect(eqRenderer, &bg);
 
             const std::string label = kEqPresetNames[i];
-            SDL_Texture* t =
-                RenderTextTexture(eqRenderer, font, label, static_cast<int>(label.size()) * gfx::BitmapFont::kCellW);
             const int textX = bx + (kEqPresetBtnW - static_cast<int>(label.size()) * gfx::BitmapFont::kCellW) / 2;
-            DrawTextureAt(eqRenderer, t, textX, kEqPresetY + 6);
-            SDL_DestroyTexture(t);
+            DrawTextureAt(eqRenderer,
+                          eqPresetTextCache[static_cast<size_t>(i)].Get(
+                              eqRenderer, font, label, static_cast<int>(label.size()) * gfx::BitmapFont::kCellW),
+                          textX, kEqPresetY + 6);
         }
     };
 
@@ -2045,15 +2104,18 @@ int main(int argc, char** argv) {
     // duration (exact for CBR, an honest approximation for VBR - the
     // original's "VBR" flag came from parsing MPEG frame headers, which
     // dr_mp3 doesn't expose), not read from a header field.
+    CachedTextTexture infoTitleTextCache;
+    std::array<CachedTextTexture, 8> infoLineTextCache; // >= max lines drawInfoFrame ever produces
+
     auto drawInfoFrame = [&]() {
         SDL_SetRenderDrawColor(infoRenderer, 0x10, 0x12, 0x09, 255);
         SDL_RenderClear(infoRenderer);
         Bevel::Draw(infoRenderer, 0, 0, kInfoWindowW, kInfoWindowH);
         DrawWindowHeader(infoRenderer, kInfoWindowW, kDragStripH);
         {
-            SDL_Texture* t = RenderTextTexture(infoRenderer, font, "INFORMATION", 11 * gfx::BitmapFont::kCellW);
-            DrawTextureAt(infoRenderer, t, 8, (kDragStripH - gfx::BitmapFont::kCellH) / 2);
-            SDL_DestroyTexture(t);
+            DrawTextureAt(infoRenderer,
+                          infoTitleTextCache.Get(infoRenderer, font, "INFORMATION", 11 * gfx::BitmapFont::kCellW), 8,
+                          (kDragStripH - gfx::BitmapFont::kCellH) / 2);
         }
         DrawCloseIcon(infoRenderer, kCloseX, kCloseY, kCloseSize);
 
@@ -2086,11 +2148,12 @@ int main(int argc, char** argv) {
         }
 
         int ly = kInfoTextY0;
-        for (const std::string& line : lines) {
-            SDL_Texture* t = RenderTextTexture(infoRenderer, font, line,
-                                                static_cast<int>(line.size()) * gfx::BitmapFont::kCellW);
-            DrawTextureAt(infoRenderer, t, kInfoTextX, ly);
-            SDL_DestroyTexture(t);
+        for (size_t i = 0; i < lines.size(); ++i) {
+            const std::string& line = lines[i];
+            DrawTextureAt(infoRenderer,
+                          infoLineTextCache[i].Get(infoRenderer, font, line,
+                                                    static_cast<int>(line.size()) * gfx::BitmapFont::kCellW),
+                          kInfoTextX, ly);
             ly += kInfoLineH;
         }
     };
@@ -2103,35 +2166,37 @@ int main(int argc, char** argv) {
     // app name/version (same formatted version string as texStatus on
     // Main) and the credit line. The icon and Zolnetwork mark are the two
     // pre-flattened bitmaps described on Skin::aboutIcon/aboutZLogo.
+    CachedTextTexture aboutTitleTextCache, aboutHeadingTextCache, aboutVersionTextCache, aboutCreditTextCache;
+
     auto drawAboutFrame = [&]() {
         SDL_SetRenderDrawColor(aboutRenderer, 0x10, 0x12, 0x09, 255);
         SDL_RenderClear(aboutRenderer);
         Bevel::Draw(aboutRenderer, 0, 0, kAboutWindowW, kAboutWindowH);
         DrawWindowHeader(aboutRenderer, kAboutWindowW, kDragStripH);
         {
-            SDL_Texture* t = RenderTextTexture(aboutRenderer, font, "ABOUT", 5 * gfx::BitmapFont::kCellW);
-            DrawTextureAt(aboutRenderer, t, 8, (kDragStripH - gfx::BitmapFont::kCellH) / 2);
-            SDL_DestroyTexture(t);
+            DrawTextureAt(aboutRenderer,
+                          aboutTitleTextCache.Get(aboutRenderer, font, "ABOUT", 5 * gfx::BitmapFont::kCellW), 8,
+                          (kDragStripH - gfx::BitmapFont::kCellH) / 2);
         }
         DrawCloseIcon(aboutRenderer, kCloseX, kCloseY, kCloseSize);
 
         DrawTextureAt(aboutRenderer, texAboutIcon, kAboutIconX, kAboutIconY);
         {
             const std::string title = "X-MAD.PLAYER REVIVAL";
-            SDL_Texture* t = RenderTextTexture(aboutRenderer, font, title,
-                                                static_cast<int>(title.size()) * gfx::BitmapFont::kCellW);
-            DrawTextureAt(aboutRenderer, t, kAboutTitleX, kAboutTitleY);
-            SDL_DestroyTexture(t);
+            DrawTextureAt(aboutRenderer,
+                          aboutHeadingTextCache.Get(aboutRenderer, font, title,
+                                                     static_cast<int>(title.size()) * gfx::BitmapFont::kCellW),
+                          kAboutTitleX, kAboutTitleY);
         }
         {
             // Same formatted version string as Main's status line
             // (texStatus) - deliberately kept in sync rather than
             // hardcoded twice.
             const std::string versionLine = std::string("*** V") + app::kVersion + " ALPHA GOJIRA ***";
-            SDL_Texture* t = RenderTextTexture(aboutRenderer, font, versionLine,
-                                                static_cast<int>(versionLine.size()) * gfx::BitmapFont::kCellW);
-            DrawTextureAt(aboutRenderer, t, kAboutVersionX, kAboutVersionY);
-            SDL_DestroyTexture(t);
+            DrawTextureAt(aboutRenderer,
+                          aboutVersionTextCache.Get(aboutRenderer, font, versionLine,
+                                                     static_cast<int>(versionLine.size()) * gfx::BitmapFont::kCellW),
+                          kAboutVersionX, kAboutVersionY);
         }
         DrawDashedHLine(aboutRenderer, 8, kAboutWindowW - 8, kAboutDividerY, 0x3d, 0xff, 0x74);
 
@@ -2143,9 +2208,8 @@ int main(int argc, char** argv) {
         {
             const std::string credit = "FHT - ZOLNETWORK";
             const int cw = static_cast<int>(credit.size()) * gfx::BitmapFont::kCellW;
-            SDL_Texture* t = RenderTextTexture(aboutRenderer, font, credit, cw);
-            DrawTextureAt(aboutRenderer, t, (kAboutWindowW - cw) / 2, kAboutCreditY);
-            SDL_DestroyTexture(t);
+            DrawTextureAt(aboutRenderer, aboutCreditTextCache.Get(aboutRenderer, font, credit, cw),
+                          (kAboutWindowW - cw) / 2, kAboutCreditY);
         }
     };
 
@@ -2898,7 +2962,13 @@ int main(int argc, char** argv) {
     }
 
     audio::PlayState lastEngineState = engine.state();
+    std::optional<PlaylistFrameKey> lastPlKey;
+    std::optional<EqFrameKey> lastEqKey;
+    std::optional<InfoFrameKey> lastInfoKey;
+    bool aboutDrawnOnce = false;
     while (running && (autoAdvanceDeadline == 0 || SDL_GetTicks() < autoAdvanceDeadline)) {
+        const Uint32 frameStart = SDL_GetTicks();
+
         SDL_Event ev;
         while (SDL_PollEvent(&ev)) processEvent(ev);
 
@@ -2923,16 +2993,59 @@ int main(int argc, char** argv) {
                        << " at t=" << SDL_GetTicks() << "ms state=" << static_cast<int>(engine.state()) << "\n";
         }
 
-        drawFrame();
-        SDL_RenderPresent(renderer);
-        drawPlaylistFrame();
-        SDL_RenderPresent(plRenderer);
-        drawEqFrame();
-        SDL_RenderPresent(eqRenderer);
-        drawInfoFrame();
-        SDL_RenderPresent(infoRenderer);
-        drawAboutFrame();
-        SDL_RenderPresent(aboutRenderer);
+        if (!mainMinimized) {
+            drawFrame();
+            SDL_RenderPresent(renderer);
+        }
+        if (plUserVisible && !plMinimized) {
+            PlaylistFrameKey plKey{playlist.Generation(), playlist.currentIndex(), plSelected,
+                                    plScrollOffset,        plPressedButton,        engine.sampleRate(),
+                                    engine.channels()};
+            if (!lastPlKey || !(*lastPlKey == plKey)) {
+                drawPlaylistFrame();
+                SDL_RenderPresent(plRenderer);
+                lastPlKey = plKey;
+            }
+        }
+        if (eqUserVisible && !eqMinimized) {
+            EqFrameKey eqKey;
+            for (int b = 0; b < audio::Equalizer::kBands; ++b) eqKey.bands[static_cast<size_t>(b)] = engine.EqBand(b);
+            eqKey.pressedSlider = eqPressedSlider;
+            eqKey.currentPreset = eqCurrentPreset;
+            if (!lastEqKey || !(*lastEqKey == eqKey)) {
+                drawEqFrame();
+                SDL_RenderPresent(eqRenderer);
+                lastEqKey = eqKey;
+            }
+        }
+        if (infoUserVisible && !infoMinimized) {
+            InfoFrameKey infoKey{playlist.Generation(), playlist.currentIndex(), engine.channels(),
+                                  engine.sampleRate(),   engine.durationSeconds()};
+            if (!lastInfoKey || !(*lastInfoKey == infoKey)) {
+                drawInfoFrame();
+                SDL_RenderPresent(infoRenderer);
+                lastInfoKey = infoKey;
+            }
+        }
+        if (aboutUserVisible && !aboutMinimized && !aboutDrawnOnce) {
+            // Purely static branding (see drawAboutFrame's own comment) -
+            // never changes after the very first draw, so unlike the other
+            // three windows this needs no per-frame key at all.
+            drawAboutFrame();
+            SDL_RenderPresent(aboutRenderer);
+            aboutDrawnOnce = true;
+        }
+
+        // The loop above has no vsync/blocking wait to throttle it (all
+        // renderers are SDL_RENDERER_SOFTWARE), so without this cap it
+        // spins as fast as the CPU allows regardless of playback state -
+        // pegging a full core at ~85% even at idle. 60fps keeps animation
+        // (marquee, spectrum falls/decay, which are tuned in pixels-per-
+        // redraw-tick, not delta-time) smooth while giving the CPU back
+        // between frames.
+        constexpr Uint32 kFrameBudgetMs = 1000 / 60;
+        const Uint32 elapsed = SDL_GetTicks() - frameStart;
+        if (elapsed < kFrameBudgetMs) SDL_Delay(kFrameBudgetMs - elapsed);
     }
     if (autoAdvanceDeadline != 0) {
         std::cout << "auto-advance-test: end index=" << playlist.currentIndex()

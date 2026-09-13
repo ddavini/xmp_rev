@@ -1,5 +1,4 @@
 - Current song highlighted in a more visible way in the PL
-- It uses a lot of CPU even when it's not doing anything
 - icon in menu bar, disappearing form dockbar when minimized
 - Position in the song indicator can be used to fast forward or rewind
 - saves the position in the song so you can restart where you left off

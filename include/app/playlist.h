@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -20,11 +21,21 @@ public:
     bool empty() const { return tracks_.empty(); }
     const std::string& at(size_t i) const { return tracks_.at(i); }
 
-    void Add(std::string path) { tracks_.push_back(std::move(path)); }
+    // Bumped by every mutation (Add/Clear/RemoveAt/MoveUp/MoveDown/LoadM3U)
+    // - lets the playlist window's redraw-when-dirty check (main.cpp) detect
+    // a reorder that leaves size() and currentIndex() both unchanged
+    // (MoveUp/MoveDown) without having to compare track contents itself.
+    uint64_t Generation() const { return generation_; }
+
+    void Add(std::string path) {
+        tracks_.push_back(std::move(path));
+        ++generation_;
+    }
 
     void Clear() {
         tracks_.clear();
         currentIndex_ = -1;
+        ++generation_;
     }
 
     // Mirrors Listone.frm's ListaMp3_KeyPress("d"): remove the entry,
@@ -54,6 +65,7 @@ public:
 private:
     std::vector<std::string> tracks_;
     int currentIndex_ = -1;
+    uint64_t generation_ = 0;
 };
 
 } // namespace xmad::app

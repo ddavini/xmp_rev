@@ -1195,6 +1195,99 @@ thereafter is exactly 2px wide (3px `kBarSegW` minus the 1px gap) with
 pixels fully contiguous from there (no gap subtracted). Full 11-test
 suite green, clean rebuild and `.app` bundle both confirmed.
 
+## TODO: "It uses a lot of CPU even when it's not doing anything" - fixed
+
+Diagnosed against the user's real, actually-running instance rather than
+guessed at (this sandbox has no real display, so this one had to lean on
+the user directly): `ps aux` showed **84.6% CPU** at idle (track paused,
+nothing being interacted with), and a live 5-second `sample` profile of
+that process showed the main thread spending essentially 100% of its time
+inside SDL2's software renderer (`SW_RunCommandQueue`/`SDL_SoftBlit`/blit
+routines). Root cause: the top-level event loop (`while (running && ...)`,
+main.cpp's tail) called `SDL_PollEvent` (non-blocking) then unconditionally
+redrew and presented all 5 windows (main/playlist/EQ/info/about) every
+single iteration, with no `SDL_Delay`, no vsync, and no frame-rate cap
+anywhere - all 5 renderers are `SDL_RENDERER_SOFTWARE`, so nothing
+throttled it externally either. It simply spun as fast as the CPU allowed,
+forever, independent of playback state. (`SESSION_STATUS.md` had
+independently flagged this same loop as "unbounded" in a debug-test context
+before this was ever traced to the general-CPU complaint - see the
+minimize-cascade entry above.)
+
+Fixed in three layered passes, each verified against the user's live,
+running instance before moving to the next (this section's own numbers
+predicted "low single digits" twice and were wrong both times - real
+measurement each step was the only way to know what was actually left):
+
+1. **Frame-rate cap.** Added `SDL_GetTicks()`+`SDL_Delay()` bracketing the
+   loop body to cap it at 60fps, plus skipping the draw+present pair
+   entirely for any window that's hidden or minimized (`plUserVisible`/
+   `eqUserVisible`/`infoUserVisible`/`aboutUserVisible` and the matching
+   `*Minimized` bools already existed for the minimize-cascade feature but
+   were never consulted before drawing - Info and About are hidden by
+   default, so this alone stopped 2 of 5 windows from ever needing to
+   render). Took CPU from 84.6% to ~30% - matches expectations: at 60fps
+   most of each 16ms budget is spent asleep in `SDL_Delay`, but real
+   per-frame render cost across the visible windows turned out higher than
+   "a few ms." Note: the fall/decay bar-visualizer animations
+   (`kFallsVelSlow` etc.) are tuned in pixels-per-redraw-tick, not
+   delta-time, so this incidentally also fixed their speed being
+   machine/CPU-load-dependent rather than a fixed, correct rate.
+
+2. **Text-texture caching.** `RenderTextTexture` (rasterize + upload a
+   fresh `SDL_Texture`) was being called for every on-screen text field
+   every single frame regardless of whether the string had changed -
+   marquee/duration/freq/volume/bitrate/PL-EQ-toggle-labels/vis-mode
+   tooltip in `drawFrame`, one per visible row plus two status lines in
+   `drawPlaylistFrame`, and the EQ's title/legend/10 band labels/5 preset
+   names (all of which are permanently static - never depend on any
+   runtime value) in `drawEqFrame`, plus similarly in `drawInfoFrame`/
+   `drawAboutFrame`. Added a small `CachedTextTexture` helper (keeps the
+   texture alive, rebuilds only when text or field width actually differs
+   from last call) and wired it into every one of those call sites.
+   **Did not reduce CPU at all** (still ~30%, paused) - a live re-profile
+   showed the actual bottleneck was elsewhere: the non-text blits (bevel,
+   button icons, sliders - never cached) plus `SDL_RenderPresent` itself,
+   which on this platform re-uploads the *entire* window surface to a
+   Metal-backed texture on every single call regardless of whether any
+   pixel changed. Kept anyway (real, if smaller, savings once combined
+   with pass 3; no reason to revert a correct, low-risk change) and moved
+   on to the actual bottleneck.
+
+3. **Per-window dirty-check.** Since `SDL_RenderPresent`'s fixed
+   Metal-texture-upload cost can only be avoided by not calling it at all,
+   added a snapshot/diff: `PlaylistFrameKey`/`EqFrameKey`/`InfoFrameKey`
+   structs capture everything each window's frame actually depends on
+   (playlist generation + currentIndex/selected/scrollOffset/pressedButton
+   + sampleRate/channels for Playlist; all 10 `EqBand` values +
+   pressedSlider/currentPreset for EQ; playlist generation + currentIndex +
+   channels/sampleRate/durationSeconds for Info), compared against the
+   previous frame's snapshot in the main loop - the whole draw+present pair
+   is skipped outright when nothing changed. Deliberately built as an
+   input snapshot rather than scattering `xDirty = true` flags across every
+   mutation site in main.cpp (add/delete/reorder/select/drag/etc.): far
+   less surface area to get wrong, since it only requires auditing what
+   each `draw*Frame` actually *reads*, not hunting down every place that
+   could write to it. Needed one small supporting change:
+   `Playlist::Generation()`, a counter bumped by every mutating method
+   (`Add`/`Clear`/`RemoveAt`/`MoveUp`/`MoveDown`/`LoadM3U`), since
+   `MoveUp`/`MoveDown` reorder the list without changing `size()` or
+   `currentIndex()`. About gets no key at all - it's purely static
+   branding (confirmed via its own existing code comment), so it now draws
+   exactly once, ever, per launch. Main is intentionally excluded from this
+   entirely: its spectrum/VU meters/marquee are genuinely animated every
+   frame during playback, so it keeps redrawing at the full 60fps cap.
+   Took CPU from ~30% to **~10.3%**, confirmed via a final live `sample`:
+   92% of main-thread samples now land in `SDL_Delay`'s `nanosleep`, with
+   the remaining ~8% being exactly Main's own per-frame redraw (expected,
+   not waste). **Verified interactively by the user** afterward (the real
+   risk of a snapshot/diff approach is missing an input): clicking a
+   different playlist row, dragging an EQ slider, and switching tracks all
+   still updated on screen immediately - confirmed "all good, works fine."
+
+Full 11-test suite green, clean rebuild and `.app` bundle confirmed after
+every pass.
+
 ## Known, explicitly-flagged divergences from the original (not bugs)
 
 - Playlist persistence: in-memory + M3U, not the original's per-entry INI

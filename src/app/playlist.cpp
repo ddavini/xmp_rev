@@ -8,6 +8,7 @@ namespace xmad::app {
 void Playlist::RemoveAt(size_t i) {
     if (i >= tracks_.size()) return;
     tracks_.erase(tracks_.begin() + static_cast<long>(i));
+    ++generation_;
     if (tracks_.empty()) {
         currentIndex_ = -1;
     } else if (currentIndex_ >= static_cast<int>(tracks_.size())) {
@@ -25,6 +26,7 @@ void Playlist::RemoveAt(size_t i) {
 void Playlist::MoveUp(size_t i) {
     if (i == 0 || i >= tracks_.size()) return;
     std::swap(tracks_[i], tracks_[i - 1]);
+    ++generation_;
     if (currentIndex_ == static_cast<int>(i)) {
         currentIndex_ = static_cast<int>(i) - 1;
     } else if (currentIndex_ == static_cast<int>(i) - 1) {
@@ -35,6 +37,7 @@ void Playlist::MoveUp(size_t i) {
 void Playlist::MoveDown(size_t i) {
     if (i + 1 >= tracks_.size()) return;
     std::swap(tracks_[i], tracks_[i + 1]);
+    ++generation_;
     if (currentIndex_ == static_cast<int>(i)) {
         currentIndex_ = static_cast<int>(i) + 1;
     } else if (currentIndex_ == static_cast<int>(i) + 1) {
@@ -59,6 +62,7 @@ bool Playlist::LoadM3U(const std::string& path) {
         while (!line.empty() && (line.back() == '\r' || line.back() == '\n')) line.pop_back();
         if (line.empty() || line[0] == '#') continue;
         tracks_.push_back(line);
+        ++generation_;
     }
     return true;
 }
