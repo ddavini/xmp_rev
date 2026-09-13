@@ -1,0 +1,197 @@
+#pragma once
+
+// Main window layout, in native (1x) pixels. Every constant here is derived
+// directly from Source/xmp.frm's control coordinates (twips / 15 = px at
+// standard 96dpi) - see the transport row note below for the one place the
+// .frm's design-time values are overridden by Form_Load's runtime reflow.
+
+namespace xmad::app::layout {
+
+constexpr int kWindowW = 330;
+// The .frm's raw ClientHeight (4050 twips) left ~120px of genuinely dead
+// black space between the transport row (ends y=117) and the peak meters
+// (started at y=240) - shrunk to fit snugly around the compacted content
+// below instead of carrying that gap forward literally.
+constexpr int kWindowH = 155;
+
+// Transport row (CommandImg indices 0-5). Design-time .frm positions are
+// placeholders; Form_Load's `For I = 1 To 5: CommandImg(I).Left = ...`
+// loop packs them contiguously left-to-right in *index* order once
+// AutoSize snaps each to its 23x13 bitmap: Back, Play, Stop, Next, Pause,
+// Eject - that's the order that ships, not the .frm's raw Left values.
+constexpr int kTransportY = 104;
+constexpr int kTransportBtnW = 23;
+constexpr int kTransportBtnH = 13;
+constexpr int kTransportX0 = 16;
+
+// Utility toggles (CommandImg indices 6-9) keep their .frm design-time
+// positions - Form_Load never reflows these.
+constexpr int kShowVolX = 143, kShowVolY = 72;
+constexpr int kMuteX = 168, kMuteY = 72;
+constexpr int kSpecModeX = 168, kSpecModeY = 88;
+constexpr int kInfoX = 168, kInfoY = 104;
+
+constexpr int kLogoX = 8, kLogoY = 8;
+// LitePic: an upward-pointing triangle, the mirror image of PICMIN's
+// downward one at kMinimizeX right next to it - reads visually as a
+// matched pair of window-control chevrons. In the original it toggled the
+// Windows systray icon (LitePic_Click -> ShowTaskBarIcon), which has no
+// equivalent here; repurposed at the user's explicit request as the
+// "maximize" control (see toggleMaximize in main.cpp) - the tiny
+// fixed-size skin has nothing to genuinely OS-maximize into, so this
+// shows/hides EQ+Playlist together instead. A deliberate behavior
+// substitution on an existing control, not a new button.
+constexpr int kLiteX = 289, kLiteY = 8;
+constexpr int kShockX = 305, kShockY = 27;
+
+// Window chrome: real xmp.frm coordinates for MinimizzaPic/MenuBarPic
+// (300,8 / 312,8), now actually wired up - the windows are borderless
+// (matching the original's BorderStyle=0), so these are the only way to
+// minimize/close, not decoration. MenuBarPic's position is identical
+// across xmp.frm/Listone.frm/frmEQ.frm, and all three windows now share
+// kWindowW, so kCloseX/Y is reused for all three.
+constexpr int kMinimizeX = 300, kMinimizeY = 8; // main window only
+constexpr int kCloseX = 312, kCloseY = 8, kCloseSize = 10;
+// Clicking anywhere in this top strip that isn't a button starts a window
+// drag (there's no OS title bar to drag by anymore) - approximates the
+// original's Form_MouseMove drag-trigger zone without replicating its
+// exact narrow hit-strip geometry.
+constexpr int kDragStripH = 20;
+
+// New (not in the original): Winamp-style PL/EQ toggle buttons on the main
+// window, since neither Listone.frm nor frmEQ.frm exposed a way to reopen
+// themselves once hidden - the original relied on a timer auto-reshowing
+// the playlist, which doesn't fit this multi-window-with-real-close model.
+constexpr int kPlToggleX = 240, kPlToggleY = 130, kPlToggleW = 36, kPlToggleH = 14;
+constexpr int kEqToggleX = 280, kEqToggleY = 130, kEqToggleW = 36, kEqToggleH = 14;
+
+// xmDisplay(0)/(1): title marquee and status line.
+constexpr int kMarqueeX = 16, kMarqueeY = 26, kDisplayFieldW = 278;
+constexpr int kStatusX = 16, kStatusY = 35;
+
+// lnPosizione (seek track line) + PicPosizione (thumb).
+constexpr int kSeekY = 52, kSeekX0 = 11, kSeekX1 = 301;
+
+// LCD readout cluster (Durata, lblMode, xmDVol, BitRate, lblFreq) - all
+// xmDisplay instances, rendered with the same bitmap font as the marquee.
+constexpr int kDurationX = 207, kDurationY = 69, kDurationW = 37;
+// picModo: the audio-mode icon (Stereo/Mono/XSound), immediately left of
+// lblMode - Left=3675/Top=1030/165x165 twips in xmp.frm, i.e. flush against
+// kModeLabelX with no gap (245 + 11 == 256). The original's icon bitmaps
+// (MODO0/STEREOON/MONOON/XSOUNDON) are compiled VB6 .RES resources, not
+// loose files like the rest of assets/skin, so this renders a single
+// bitmap-font letter (S/M/X) in the same cell instead of a hand-drawn icon.
+constexpr int kModeIconX = 245, kModeIconY = 69, kModeIconSize = 11;
+constexpr int kModeLabelX = 256, kModeLabelY = 69, kModeLabelW = 33;
+constexpr int kVolTextX = 203, kVolTextY = 92, kVolTextW = 33;
+constexpr int kBitRateX = 240, kBitRateY = 92, kBitRateW = 27;
+constexpr int kFreqX = 266, kFreqY = 92, kFreqW = 27;
+
+// xmsVol (xmSlide.ctl instance): up arrow, thumb track, down arrow.
+constexpr int kVolSliderX = 294, kVolSliderY = 61, kVolSliderW = 16, kVolSliderH = 49;
+constexpr int kVolArrowSize = 14;
+
+// Bordered panel behind the Time/Mode/BitRate/Freq readout cluster - a real
+// screenshot of the original app shows these grouped in one bevelled box,
+// not floating loose text as an earlier pass here had them.
+constexpr int kReadoutPanelX = 199, kReadoutPanelY = 65, kReadoutPanelW = 98, kReadoutPanelH = 42;
+
+// analyzer (spectrum bars) and the bottom L/R peak meter row (abuff).
+constexpr int kAnalyzerX = 16, kAnalyzerY = 72, kAnalyzerW = 89, kAnalyzerH = 23;
+constexpr int kPeakX = 8, kPeakY = 124, kPeakW = 105, kPeakH = 23;
+// Dashed vertical divider between the analyzer and the readout/transport
+// zone, visible in the original screenshot.
+constexpr int kAnalyzerDividerX = 112;
+
+// Playlist window (Listone.frm). The original docks this directly under
+// the main window at the same width (Me.Width = xmp.Width); height here is
+// a fixed choice (the original stretched to fill whatever space was left
+// on screen, which doesn't translate to a fixed-layout port).
+constexpr int kPlaylistWindowW = kWindowW;
+constexpr int kPlaylistWindowH = 140;
+// List starts below kDragStripH (a real header bar, not bare content
+// starting at the window edge - needed so the drag zone doesn't eat clicks
+// on the first couple of list rows). Shortened from 134 (13 rows) to 80
+// (8 rows) - screen-fit trumps row count, and it still scrolls.
+constexpr int kPlaylistListX = 8, kPlaylistListY = 24, kPlaylistListW = 314, kPlaylistListH = 80;
+constexpr int kPlaylistRowH = 10;
+// Real button size (PICCLEAR/PICDELETE/PICSAVE/FRECCIAUP/FRECCIADWN/
+// PICSEEK are all 14x14) - an earlier pass here sized the hitboxes to 23px
+// (copied from the transport row's 23x13 icons) without checking these are
+// a different, smaller asset. Visual left-to-right order (by the .frm's
+// design-time Left values, not CommandImg index order) is Clear, Delete,
+// Save ("Manage List"), Up, Down, Seek ("jump to now playing") - matches a
+// real screenshot's "C D S up down seek" row. Save/Seek were missing
+// entirely from an earlier pass; only Clear/Delete/Up/Down existed.
+constexpr int kPlaylistBtnY = 108, kPlaylistBtnW = 14, kPlaylistBtnH = 14, kPlaylistBtnPitch = 16;
+constexpr int kPlaylistClearX = 8;
+constexpr int kPlaylistDeleteX = kPlaylistClearX + kPlaylistBtnPitch;
+constexpr int kPlaylistSaveX = kPlaylistDeleteX + kPlaylistBtnPitch;
+constexpr int kPlaylistUpX = kPlaylistSaveX + kPlaylistBtnPitch;
+constexpr int kPlaylistDownX = kPlaylistUpX + kPlaylistBtnPitch;
+constexpr int kPlaylistSeekX = kPlaylistDownX + kPlaylistBtnPitch;
+
+// xmDInfo(0)/(1): two scrolling status-line panels at the bottom right,
+// visible in a real screenshot - not implemented at all in an earlier pass.
+constexpr int kPlInfoX = kPlaylistSeekX + kPlaylistBtnPitch + 8;
+constexpr int kPlInfoW = kPlaylistWindowW - kPlInfoX - 8;
+constexpr int kPlInfoY0 = kPlaylistBtnY - 2, kPlInfoY1 = kPlaylistBtnY + 12, kPlInfoH = 12;
+
+// EQ window (frmEQ.frm): 10-band graphic EQ. Width matches kWindowW so it
+// stacks flush with the main and playlist windows (Winamp-style: Main / EQ
+// / Playlist, edge to edge) rather than the original's exact behavior
+// (Me.Top/Left/Height/Width = xmp's, drawn directly on top of the main
+// window - independent SDL windows don't have the VB form z-order/owner
+// behavior that made that overlap sensible). Presets are a horizontal row
+// under the sliders rather than the original's side panel, since a 330px
+// width doesn't fit both side by side the way the original's wider,
+// un-stacked frmEQ did.
+constexpr int kEqWindowW = kWindowW, kEqWindowH = 130;
+constexpr int kEqLegendX = 4;
+constexpr int kEqSliderX0 = 36, kEqSliderPitch = 28, kEqSliderW = 16;
+// Track height trimmed from 90 to 65 (less thumb travel resolution, but a
+// real screen-fit issue trumps that) to shrink the window from 170 to 130.
+constexpr int kEqSliderTrackY = 22, kEqSliderTrackH = 65;
+constexpr int kEqArrowSize = 14;
+constexpr int kEqFreqLabelY = 91;
+constexpr int kEqPresetX0 = 6, kEqPresetY = 103, kEqPresetBtnW = 60, kEqPresetH = 18, kEqPresetGap = 3;
+
+// Info window (new - not in the original as a fourth always-visible window;
+// frmInfo.frm was a modal popup, toggled here instead like EQ/Playlist).
+// The original's frmInfo shows MPEG-frame-header and ID3 detail (VBR,
+// Emphasis, CRC, Track, Padding, Artist, Album, Genre, Comment, ...) that
+// isn't available here: dr_mp3/dr_flac decode audio but don't parse ID3
+// tags or raw MPEG frame headers (same gap already flagged for ID3 tag
+// editing). Shown instead is only what's genuinely read from the open
+// decoder - File/Format/Mode/Frequency/average Bit Rate/Duration/Decoder.
+constexpr int kInfoWindowW = kWindowW;
+constexpr int kInfoWindowH = 100;
+constexpr int kInfoTextX = 8, kInfoTextY0 = 26, kInfoLineH = 10;
+
+// About window (TODO: "create about page linked to the japanese character
+// click ... with this logo ... and version"). Not present in the original
+// at all (no frmAbout in the VB6 source) - opened by clicking the same
+// LOGOJAP/"shock" icon (kShockX/Y above) that in the original just
+// retriggered a random title-scroll effect; toggled like EQ/Playlist/Info
+// rather than modal. Layout mirrors the About window mockup published
+// earlier this session: icon+title row, version line, a dashed divider,
+// the Zolnetwork brand mark, then a credit line - see drawAboutFrame in
+// main.cpp.
+constexpr int kAboutWindowW = kWindowW;
+// aboutZLogo went through two resize rounds after the user twice reported
+// it unreadable: 100x100, then a naive 200x200 (still resizing the whole
+// mostly-black 1024x1024 source canvas - the actual artwork only occupies
+// roughly its middle 26-31%, so even at 200x200 the real content was
+// still tiny). Now cropped to just the artwork's real bounding box first,
+// then resized to 208x240 - a far milder downscale that actually keeps
+// the tagline text legible. Non-square, so window height and everything
+// below the divider grew to match.
+constexpr int kAboutWindowH = 350;
+constexpr int kAboutIconX = 10, kAboutIconY = 28; // 32x32, aboutIcon's native size
+constexpr int kAboutTitleX = 50, kAboutTitleY = 41;
+constexpr int kAboutVersionX = 10, kAboutVersionY = 66;
+constexpr int kAboutDividerY = 78;
+constexpr int kAboutZLogoY = 85; // aboutZLogo is 208x240, centered horizontally
+constexpr int kAboutCreditY = 333;
+
+} // namespace xmad::app::layout
