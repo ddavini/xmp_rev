@@ -24,6 +24,17 @@ constexpr int kTransportBtnW = 23;
 constexpr int kTransportBtnH = 13;
 constexpr int kTransportX0 = 16;
 
+// Eject's dropdown (TODO: "open all the .mp3s or .flacs [if] a directory
+// is selected") - same two-item, no-hover-highlight style as the
+// Playlist window's Save menu (kPlSaveMenu* below), just relocated to
+// Main and anchored above the Eject button (index 5 in the transport
+// row) rather than below it, opening upward into empty space above the
+// transport row instead of over other controls.
+constexpr int kEjectMenuW = 64, kEjectMenuItemH = 12;
+constexpr int kEjectMenuH = kEjectMenuItemH * 2; // Add Files, Add Folder
+constexpr int kEjectMenuX = kTransportX0 + 5 * kTransportBtnW;
+constexpr int kEjectMenuY = kTransportY - kEjectMenuH;
+
 // Utility toggles (CommandImg indices 6-9) keep their .frm design-time
 // positions - Form_Load never reflows these.
 constexpr int kShowVolX = 143, kShowVolY = 72;

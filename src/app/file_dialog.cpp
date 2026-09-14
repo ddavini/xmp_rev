@@ -20,7 +20,23 @@ std::vector<std::string> ParseDialogOutput(const std::string& raw) {
     return paths;
 }
 
-std::vector<std::string> OpenNativeFileDialog() {
+namespace {
+
+// Shared by every OS-shelling function below - runs `cmd`, reads all of
+// its stdout, returns it raw for the caller to parse.
+std::string RunPipedCommand(const char* cmd) {
+    FILE* pipe = popen(cmd, "r");
+    if (!pipe) return "";
+    std::string all;
+    std::array<char, 4096> buf{};
+    while (fgets(buf.data(), buf.size(), pipe) != nullptr) all += buf.data();
+    pclose(pipe);
+    return all;
+}
+
+} // namespace
+
+std::vector<std::string> OpenNativeFileDialogFiles() {
 #if defined(__APPLE__)
     // osascript pops a real Cocoa NSOpenPanel without linking AppKit
     // directly or adding an Objective-C++ translation unit to the build.
@@ -45,13 +61,34 @@ std::vector<std::string> OpenNativeFileDialog() {
         "|| kdialog --getopenfilename --multiple --separate-output . "
         "'Audio/Playlist files (*.mp3 *.flac *.m3u)' 2>/dev/null";
 #endif
-    FILE* pipe = popen(cmd, "r");
-    if (!pipe) return {};
-    std::string all;
-    std::array<char, 4096> buf{};
-    while (fgets(buf.data(), buf.size(), pipe) != nullptr) all += buf.data();
-    pclose(pipe);
-    return ParseDialogOutput(all);
+    return ParseDialogOutput(RunPipedCommand(cmd));
+}
+
+std::vector<std::string> OpenNativeFileDialogFolder() {
+#if defined(__APPLE__)
+    // "choose folder" is AppleScript's dedicated command for this - not
+    // "choose file or folder" (not a real command; confirmed against
+    // StandardAdditions.sdef, which has "choose file" and "choose
+    // folder" as entirely separate commands, neither combinable with the
+    // other's parameters - "choose folder" has no file-type filter to
+    // begin with, so there was never a way to fold this into
+    // OpenNativeFileDialogFiles as one dialog).
+    const char* cmd =
+        "osascript -e 'try' "
+        "-e 'set theFolders to choose folder with prompt \"Add to Playlist\" with multiple selections allowed' "
+        "-e 'set out to \"\"' "
+        "-e 'repeat with f in theFolders' "
+        "-e 'set out to out & (POSIX path of f) & linefeed' "
+        "-e 'end repeat' "
+        "-e 'return out' "
+        "-e 'on error' "
+        "-e 'return \"\"' "
+        "-e 'end try' 2>/dev/null";
+#else
+    const char* cmd = "zenity --file-selection --directory --multiple --title='Add Folder to Playlist' 2>/dev/null "
+                       "|| kdialog --getexistingdirectory . 2>/dev/null";
+#endif
+    return ParseDialogOutput(RunPipedCommand(cmd));
 }
 
 std::string TrimTrailingNewline(const std::string& raw) {
@@ -80,13 +117,7 @@ std::optional<std::string> SaveNativeFileDialog(const std::string& defaultName) 
                              "|| kdialog --getsavefilename ./" +
                              defaultName + " 'Playlist (*.m3u)' 2>/dev/null";
 #endif
-    FILE* pipe = popen(cmd.c_str(), "r");
-    if (!pipe) return std::nullopt;
-    std::string all;
-    std::array<char, 4096> buf{};
-    while (fgets(buf.data(), buf.size(), pipe) != nullptr) all += buf.data();
-    pclose(pipe);
-    const std::string path = TrimTrailingNewline(all);
+    const std::string path = TrimTrailingNewline(RunPipedCommand(cmd.c_str()));
     return path.empty() ? std::nullopt : std::optional<std::string>(path);
 }
 

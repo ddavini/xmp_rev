@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <functional>
 #include <iostream>
@@ -1154,8 +1155,8 @@ int main(int argc, char** argv) {
     // Bluetooth/Control Center Now Playing info (macOS-only) needs the
     // current track's display name, which needs getPlaylistDisplayName -
     // not yet declared this far up. Same deferred-std::function trick as
-    // onEjectRequested below, assigned its real body once
-    // getPlaylistDisplayName exists. No-op on non-Darwin builds, where
+    // onAddFilesRequested/onAddFolderRequested below, assigned its real
+    // body once getPlaylistDisplayName exists. No-op on non-Darwin builds, where
     // this stays the do-nothing default forever.
     std::function<void(bool)> notifyNowPlayingChanged = [](bool) {};
 
@@ -1173,14 +1174,20 @@ int main(int argc, char** argv) {
         applyPerSongEqForCurrentTrack();
     };
 
-    // handleTransportPress (Eject, below) needs to add files to the
-    // playlist the same way a drag-and-drop does, but that logic
+    // The Eject menu's two items (below) need to add files/a folder to
+    // the playlist the same way a drag-and-drop does, but that logic
     // (handleDroppedFile) isn't declared until after the playlist window's
-    // state exists, further down this function. Deferring through a
-    // std::function set later - rather than reordering a few hundred lines
-    // of playlist setup above handleTransportPress - keeps this change
-    // local to just the Eject feature.
-    std::function<void()> onEjectRequested = [] {};
+    // state exists, further down this function. Deferring through
+    // std::functions set later - rather than reordering a few hundred
+    // lines of playlist setup above handleTransportPress - keeps this
+    // change local to just the Eject feature.
+    std::function<void()> onAddFilesRequested = [] {};
+    std::function<void()> onAddFolderRequested = [] {};
+    // In-app dropdown, replacing an earlier native "Files or Folder?"
+    // AppleScript prompt (too jarring next to the rest of this UI) -
+    // mirrors the Playlist window's Save-button menu pattern
+    // (plSaveMenuOpen) one level up, in the main window instead.
+    bool ejectMenuOpen = false;
 
     // Distinguishes "user pressed Stop" from "track finished naturally" -
     // both end up as engine.state() == Stopped, but only the latter should
@@ -1243,7 +1250,7 @@ int main(int argc, char** argv) {
                 break;
             }
             case TransportAction::Eject:
-                onEjectRequested();
+                ejectMenuOpen = !ejectMenuOpen;
                 break;
         }
     };
@@ -1345,6 +1352,7 @@ int main(int argc, char** argv) {
     CachedTextTexture marqueeTextCache, durationTextCache, freqTextCache, volTextCache, bitRateTextCache;
     CachedTextTexture peakLLabelCache, peakRLabelCache; // "L"/"R" next to the peak meter row (TODO)
     CachedTextTexture plToggleTextCache, eqToggleTextCache, visTooltipTextCache;
+    std::array<CachedTextTexture, 2> ejectMenuTextCache; // Add Files, Add Folder
 
     auto drawFrame = [&]() {
         SDL_SetRenderDrawColor(renderer, 0x10, 0x12, 0x09, 255);
@@ -1902,6 +1910,24 @@ int main(int argc, char** argv) {
             SDL_RenderDrawRect(renderer, &bg);
             DrawTextureAt(renderer, visTooltipTextCache.Get(renderer, font, label, textW), bx + 3, by + 2);
         }
+
+        if (ejectMenuOpen) {
+            // Same style as the Playlist window's Save menu (Bevel::Draw
+            // fills an opaque background before bordering) - drawn last
+            // so it sits on top of everything else in this window.
+            Bevel::Draw(renderer, kEjectMenuX, kEjectMenuY, kEjectMenuW, kEjectMenuH);
+            static const char* kEjectMenuItems[2] = {"ADD FILES", "ADD FOLDER"};
+            for (int i = 0; i < 2; ++i) {
+                const int iy = kEjectMenuY + i * kEjectMenuItemH;
+                DrawTextureAt(renderer,
+                              ejectMenuTextCache[static_cast<size_t>(i)].Get(renderer, font, kEjectMenuItems[i],
+                                                                              10 * gfx::BitmapFont::kCellW),
+                              kEjectMenuX + 2, iy + (kEjectMenuItemH - gfx::BitmapFont::kCellH) / 2);
+            }
+            SDL_SetRenderDrawColor(renderer, 0x23, 0x26, 0x20, 255);
+            SDL_RenderDrawLine(renderer, kEjectMenuX + 1, kEjectMenuY + kEjectMenuItemH,
+                                kEjectMenuX + kEjectMenuW - 2, kEjectMenuY + kEjectMenuItemH);
+        }
     };
 
     // ---- playlist window (Listone.frm) ----
@@ -2263,15 +2289,49 @@ int main(int argc, char** argv) {
             playlist.Add(path);
             plSelected = static_cast<int>(playlist.size()) - 1;
             ensureRowVisible(plSelected);
+        } else {
+            // TODO: "open all the .mp3s or .flacs [if] a directory is
+            // selected" - a dropped/chosen folder (drag-and-drop already
+            // passes one straight through unchanged; OpenNativeFileDialog
+            // now allows picking a folder too, for the same reason) adds
+            // every .mp3/.flac directly inside it, sorted alphabetically
+            // to match Finder's default order. Not recursive - matches
+            // the TODO's literal wording, and avoids a surprise mass
+            // import from an accidentally-dropped parent folder.
+            std::error_code ec;
+            if (std::filesystem::is_directory(path, ec)) {
+                std::vector<std::string> found;
+                try {
+                    for (const auto& entry : std::filesystem::directory_iterator(path)) {
+                        if (!entry.is_regular_file()) continue;
+                        const std::string entryExt = lowerExt(entry.path().string());
+                        if (entryExt == "mp3" || entryExt == "flac") found.push_back(entry.path().string());
+                    }
+                } catch (const std::filesystem::filesystem_error&) {
+                    // Keep whatever was found before a permission error or
+                    // similar mid-iteration hiccup - partial results beat
+                    // none.
+                }
+                std::sort(found.begin(), found.end());
+                for (const auto& f : found) playlist.Add(f);
+                if (!found.empty()) {
+                    plSelected = static_cast<int>(playlist.size()) - 1;
+                    ensureRowVisible(plSelected);
+                }
+            }
         }
     };
 
-    // Eject: OpenMp3dlg equivalent - native file picker, each chosen path
-    // fed through the exact same add-to-playlist logic a drag-and-drop
-    // uses (handleDroppedFile), so multi-select and m3u/mp3/flac handling
-    // stay in one place.
-    onEjectRequested = [&]() {
-        for (const std::string& path : app::OpenNativeFileDialog()) handleDroppedFile(path);
+    // Eject: OpenMp3dlg equivalent - native file/folder picker, each
+    // chosen path fed through the exact same add-to-playlist logic a
+    // drag-and-drop uses (handleDroppedFile, including its directory
+    // expansion), so multi-select, m3u/mp3/flac handling, and "a whole
+    // folder was picked" all stay in one place.
+    onAddFilesRequested = [&]() {
+        for (const std::string& path : app::OpenNativeFileDialogFiles()) handleDroppedFile(path);
+    };
+    onAddFolderRequested = [&]() {
+        for (const std::string& path : app::OpenNativeFileDialogFolder()) handleDroppedFile(path);
     };
 
     // ---- EQ window (frmEQ.frm) ----
@@ -3157,7 +3217,18 @@ int main(int argc, char** argv) {
 
             const int lx = ev.button.x / scale, ly = ev.button.y / scale;
             if (ev.button.windowID == mainWindowID) {
-                if (inRect(lx, ly, kMinimizeX, kMinimizeY, 10, 9)) {
+                if (ejectMenuOpen) {
+                    // Mirrors the Playlist window's Save-menu pattern: any
+                    // click while open closes it, whether or not it landed
+                    // on an item - never falls through to other buttons/
+                    // controls underneath, same as there.
+                    ejectMenuOpen = false;
+                    if (inRect(lx, ly, kEjectMenuX, kEjectMenuY, kEjectMenuW, kEjectMenuH)) {
+                        const int item = (ly - kEjectMenuY) / kEjectMenuItemH;
+                        if (item == 0) onAddFilesRequested();
+                        else if (item == 1) onAddFolderRequested();
+                    }
+                } else if (inRect(lx, ly, kMinimizeX, kMinimizeY, 10, 9)) {
 #ifdef __APPLE__
                     enterAppTray();
 #else
