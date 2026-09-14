@@ -1788,16 +1788,15 @@ int main(int argc, char** argv) {
             const bool isSelected = (idx == plSelected);
 
             if (isPlaying) {
-                // A real screenshot of the original shows the now-playing
-                // row as a dashed marquee-style outline, not a solid fill -
-                // an earlier pass here guessed at a filled highlight.
-                DrawDashedHLine(plRenderer, kPlaylistListX, kPlaylistListX + kPlaylistListW, ry, 0x3d, 0xff, 0x74);
-                DrawDashedHLine(plRenderer, kPlaylistListX, kPlaylistListX + kPlaylistListW, ry + kPlaylistRowH - 1,
-                                0x3d, 0xff, 0x74);
-                DrawDashedVLine(plRenderer, kPlaylistListX, ry, ry + kPlaylistRowH, 0x3d, 0xff, 0x74);
-                DrawDashedVLine(plRenderer, kPlaylistListX + kPlaylistListW - 1, ry, ry + kPlaylistRowH, 0x3d, 0xff,
-                                0x74);
-            } else if (isSelected) {
+                // Solid, dim fill for the now-playing row - a quarter-
+                // brightness version of the UI's accent green, dark enough
+                // that the full-brightness row text (drawn on top, below)
+                // stays legible against it.
+                SDL_SetRenderDrawColor(plRenderer, 0x0f, 0x40, 0x1d, 255);
+                SDL_Rect bg{kPlaylistListX, ry, kPlaylistListW, kPlaylistRowH};
+                SDL_RenderFillRect(plRenderer, &bg);
+            }
+            if (isSelected) {
                 SDL_SetRenderDrawColor(plRenderer, 0x3d, 0xff, 0x74, 255);
                 SDL_Rect bg{kPlaylistListX, ry, kPlaylistListW, kPlaylistRowH};
                 SDL_RenderDrawRect(plRenderer, &bg);
