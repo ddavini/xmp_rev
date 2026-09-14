@@ -3099,11 +3099,13 @@ int main(int argc, char** argv) {
             seekDragging = false;
             mainDrag.active = plDrag.active = eqDrag.active = infoDrag.active = aboutDrag.active = false;
         } else if (ev.type == SDL_MOUSEMOTION) {
-            updateDrag(mainDrag);
-            updateDrag(plDrag);
-            updateDrag(eqDrag);
-            updateDrag(infoDrag);
-            updateDrag(aboutDrag);
+            // Dragging itself is driven per-frame below, not from here - a
+            // fast drag can outrun the window entirely (cursor ends up over
+            // another xmad window, a gap between them, or the desktop), at
+            // which point no more SDL_MOUSEMOTION events for any xmad
+            // window arrive at all, and a motion-event-gated update would
+            // leave the drag frozen mid-air even though the window itself
+            // never got a mouse-up.
             if (volDragging && ev.motion.windowID == mainWindowID) {
                 handleVolSliderClickAt(ev.motion.y / scale);
             }
@@ -3344,6 +3346,18 @@ int main(int argc, char** argv) {
 
         SDL_Event ev;
         while (SDL_PollEvent(&ev)) processEvent(ev);
+
+        // Polled every frame (not just on SDL_MOUSEMOTION) so a fast drag
+        // that outruns the window - leaving it stranded outside every xmad
+        // window's bounds, where no motion events arrive for any of them -
+        // still keeps tracking the live cursor position each frame instead
+        // of freezing mid-drag. Each call already no-ops when its
+        // DragState isn't active.
+        updateDrag(mainDrag);
+        updateDrag(plDrag);
+        updateDrag(eqDrag);
+        updateDrag(infoDrag);
+        updateDrag(aboutDrag);
 
         // Auto-advance: engine.state() can drop to Stopped either because
         // the user pressed Stop, or because playback reached the end of
