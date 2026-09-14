@@ -1268,6 +1268,7 @@ int main(int argc, char** argv) {
     };
 
     CachedTextTexture marqueeTextCache, durationTextCache, freqTextCache, volTextCache, bitRateTextCache;
+    CachedTextTexture peakLLabelCache, peakRLabelCache; // "L"/"R" next to the peak meter row (TODO)
     CachedTextTexture plToggleTextCache, eqToggleTextCache, visTooltipTextCache;
 
     auto drawFrame = [&]() {
@@ -1752,13 +1753,26 @@ int main(int argc, char** argv) {
         // 2-color split - see level_meter.h for how that gradient was
         // recovered and why a continuous per-segment sample is the right
         // way to reproduce a reveal-a-bitmap mechanic with discrete LEDs.
+        // TODO: "L R in front of the two bars" - new, not in the original
+        // (no ToolTipText/label was ever found for this row), added so
+        // the two rows read as channels rather than an unlabeled pair.
+        // Both the labels and kPeakX itself (layout.h) were later shifted
+        // +8px right together (user follow-up) so the bars line up with
+        // the analyzer box/transport row above - same 1px gap between
+        // label and bar as originally, just both moved.
         {
             const std::array<float, 2> chLevel = {peakL, peakR};
             const int segCount = 20;
             const int segW = kPeakW / segCount - 1;
+            constexpr int kPeakLabelX = kPeakX - gfx::BitmapFont::kCellW - 1;
             for (int ch = 0; ch < 2; ++ch) {
                 const int litSegs = static_cast<int>(chLevel[static_cast<size_t>(ch)] * segCount);
                 const int rowY = kPeakY + ch * (kPeakH / 2 + 2);
+                const int rowH = (kPeakH / 2) - 2;
+                CachedTextTexture& labelCache = ch == 0 ? peakLLabelCache : peakRLabelCache;
+                const char* label = ch == 0 ? "L" : "R";
+                DrawTextureAt(renderer, labelCache.Get(renderer, font, label, gfx::BitmapFont::kCellW), kPeakLabelX,
+                              rowY + (rowH - gfx::BitmapFont::kCellH) / 2);
                 for (int i = 0; i < segCount; ++i) {
                     const int sx = kPeakX + i * (segW + 1);
                     if (i < litSegs) {

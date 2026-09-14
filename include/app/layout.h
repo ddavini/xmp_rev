@@ -98,7 +98,14 @@ constexpr int kReadoutPanelX = 199, kReadoutPanelY = 65, kReadoutPanelW = 98, kR
 
 // analyzer (spectrum bars) and the bottom L/R peak meter row (abuff).
 constexpr int kAnalyzerX = 16, kAnalyzerY = 72, kAnalyzerW = 89, kAnalyzerH = 23;
-constexpr int kPeakX = 8, kPeakY = 124, kPeakW = 105, kPeakH = 23;
+// kPeakX == kAnalyzerX: shifted right from its original 8px (user request,
+// after adding the L/R labels - see their kPeakLabelX comment in main.cpp)
+// so the bars line up with the analyzer box and transport row above, which
+// already share this same left edge (kTransportX0 is also 16). The
+// analyzer's own dashed divider (kAnalyzerDividerX=112, below) only spans
+// the analyzer box's height, not this row, so the wider row this shift
+// produces (right edge 121 instead of 113) doesn't cross anything.
+constexpr int kPeakX = kAnalyzerX, kPeakY = 124, kPeakW = 105, kPeakH = 23;
 // Dashed vertical divider between the analyzer and the readout/transport
 // zone, visible in the original screenshot.
 constexpr int kAnalyzerDividerX = 112;
