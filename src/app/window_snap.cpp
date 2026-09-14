@@ -48,4 +48,12 @@ std::vector<int> FindDockedGroup(int rootIndex, const std::vector<WinRect>& all,
     return group;
 }
 
+WinRect SnapToScreenEdges(int x, int y, int w, int h, const WinRect& screen, int threshold) {
+    if (std::abs(x - screen.x) <= threshold) x = screen.x;                                   // left
+    if (std::abs((x + w) - (screen.x + screen.w)) <= threshold) x = screen.x + screen.w - w;  // right
+    if (std::abs(y - screen.y) <= threshold) y = screen.y;                                    // top
+    if (std::abs((y + h) - (screen.y + screen.h)) <= threshold) y = screen.y + screen.h - h;  // bottom
+    return {x, y, w, h};
+}
+
 } // namespace xmad::app

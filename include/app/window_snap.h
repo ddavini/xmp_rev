@@ -33,4 +33,14 @@ bool IsDocked(const WinRect& a, const WinRect& b, int tolerance);
 // root window is dragged.
 std::vector<int> FindDockedGroup(int rootIndex, const std::vector<WinRect>& all, int tolerance);
 
+// If an edge of the rect at (x,y,w,h) is within `threshold` px of the
+// matching edge of `screen`, that edge snaps flush against it. Unlike
+// SnapDragPosition (which docks *outside* another window's edge), this
+// only ever pulls the rect's own edge to sit flush *inside* screen's
+// boundary - dragging near a corner snaps both axes independently, which
+// is what makes it stick to the corner. `screen` should be a display's
+// usable bounds (e.g. from SDL_GetDisplayUsableBounds), not its full
+// bounds, so windows snap clear of the menu bar and Dock.
+WinRect SnapToScreenEdges(int x, int y, int w, int h, const WinRect& screen, int threshold);
+
 } // namespace xmad::app

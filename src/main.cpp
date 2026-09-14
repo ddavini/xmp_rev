@@ -2772,8 +2772,18 @@ int main(int argc, char** argv) {
             SDL_GetWindowSize(other, &ow, &oh);
             others.push_back({ox, oy, ow, oh});
         }
-        const auto snapped =
+        auto snapped =
             app::SnapDragPosition(mx - ds.offsetX, my - ds.offsetY, w, h, others, kSnapThreshold);
+
+        // Also snap to the screen's usable bounds (never the full display -
+        // that would let a window's edge slide under the menu bar or behind
+        // the Dock), so dragging near an edge sticks flush to it, and near a
+        // corner sticks to both edges at once for free.
+        SDL_Rect usable{};
+        SDL_GetDisplayUsableBounds(SDL_GetWindowDisplayIndex(ds.win), &usable);
+        snapped = app::SnapToScreenEdges(snapped.x, snapped.y, w, h,
+                                          {usable.x, usable.y, usable.w, usable.h}, kSnapThreshold);
+
         SDL_SetWindowPosition(ds.win, snapped.x, snapped.y);
         for (auto& [followerWin, off] : ds.followers) {
             SDL_SetWindowPosition(followerWin, snapped.x + off.first, snapped.y + off.second);

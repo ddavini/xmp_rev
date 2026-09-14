@@ -11,6 +11,7 @@
 using xmad::app::FindDockedGroup;
 using xmad::app::IsDocked;
 using xmad::app::SnapDragPosition;
+using xmad::app::SnapToScreenEdges;
 using xmad::app::WinRect;
 
 namespace {
@@ -121,6 +122,52 @@ int main() {
         Check(group.size() == 1, "detached playlist does not join the group");
         Check(std::find(group.begin(), group.end(), 1) != group.end(), "eq still follows main");
         Check(std::find(group.begin(), group.end(), 2) == group.end(), "detached playlist is excluded");
+    }
+
+    // SnapToScreenEdges: left edge.
+    {
+        WinRect screen{0, 0, 1440, 900};
+        auto r = SnapToScreenEdges(10, 300, 330, 155, screen, kThreshold); // 10px off from flush (0)
+        Check(r.x == 0, "snaps to screen's left edge");
+    }
+
+    // SnapToScreenEdges: right edge.
+    {
+        WinRect screen{0, 0, 1440, 900};
+        auto r = SnapToScreenEdges(1100, 300, 330, 155, screen, kThreshold); // right would be 1430, 10px off from 1440
+        Check(r.x == 1440 - 330, "snaps to screen's right edge");
+    }
+
+    // SnapToScreenEdges: top edge.
+    {
+        WinRect screen{0, 0, 1440, 900};
+        auto r = SnapToScreenEdges(300, 8, 330, 155, screen, kThreshold); // 8px off from flush (0)
+        Check(r.y == 0, "snaps to screen's top edge");
+    }
+
+    // SnapToScreenEdges: bottom edge.
+    {
+        WinRect screen{0, 0, 1440, 900};
+        auto r = SnapToScreenEdges(300, 750, 330, 140, screen, kThreshold); // bottom would be 890, 10px off from 900
+        Check(r.y == 900 - 140, "snaps to screen's bottom edge");
+    }
+
+    // SnapToScreenEdges: near a corner, x and y snap independently in one call.
+    {
+        WinRect screen{0, 0, 1440, 900};
+        auto topLeft = SnapToScreenEdges(6, 5, 330, 155, screen, kThreshold);
+        Check(topLeft.x == 0 && topLeft.y == 0, "top-left corner: x and y both snap");
+
+        auto bottomRight = SnapToScreenEdges(1100, 740, 330, 155, screen, kThreshold);
+        Check(bottomRight.x == 1440 - 330 && bottomRight.y == 900 - 155,
+              "bottom-right corner: x and y both snap");
+    }
+
+    // SnapToScreenEdges: no snap when far from every edge.
+    {
+        WinRect screen{0, 0, 1440, 900};
+        auto r = SnapToScreenEdges(500, 400, 330, 155, screen, kThreshold);
+        Check(r.x == 500 && r.y == 400, "no snap when far from every screen edge");
     }
 
     if (g_failures == 0) {
