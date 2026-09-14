@@ -149,6 +149,7 @@ struct PlaylistFrameKey {
     int pressedButton = -2;
     unsigned sampleRate = 0;
     unsigned channels = 0;
+    bool saveMenuOpen = false;
     bool operator==(const PlaylistFrameKey&) const = default;
 };
 
@@ -374,6 +375,8 @@ int main(int argc, char** argv) {
     std::string playlistClickName;     // debug: synthesize this playlist button press first
     std::string playlistFile;          // M3U file to load into the playlist
     int selectRowArg = -1;             // debug: synthesize selecting this playlist row first
+    bool playlistQuickSaveTest = false; // debug: invoke Quick Save's write lambda directly
+    std::string playlistSaveAsTestPath; // debug: invoke Save As's write lambda with this path, bypassing the OS dialog
     std::string dropPath;              // debug: synthesize dropping this file first
     std::string dumpEqFramePath;       // same dump mechanism, for the EQ window
     std::string dumpInfoFramePath;     // same dump mechanism, for the Info window
@@ -443,6 +446,10 @@ int main(int argc, char** argv) {
             playlistClickName = argv[++i];
         } else if (a == "--select-row" && i + 1 < argc) {
             selectRowArg = std::atoi(argv[++i]);
+        } else if (a == "--playlist-quick-save") {
+            playlistQuickSaveTest = true;
+        } else if (a == "--playlist-save-as" && i + 1 < argc) {
+            playlistSaveAsTestPath = argv[++i];
         } else if (a == "--playlist" && i + 1 < argc) {
             playlistFile = argv[++i];
         } else if (a == "--auto-advance-test" && i + 1 < argc) {
@@ -1824,11 +1831,26 @@ int main(int argc, char** argv) {
     int plPressedButton = -1;
     Uint32 lastClickTimeMs = 0;
     int lastClickedRow = -1;
+    bool plSaveMenuOpen = false; // Quick Save/Save As popup (see the Save button below)
+    // Quick Save's write target - starts at the old hardcoded default,
+    // retargeted by a successful Save As. In-memory only, not persisted
+    // across restarts (not asked for).
+    std::string plQuickSavePath = "xmad_playlist.m3u";
 
     auto ensureRowVisible = [&](int row) {
         if (row < plScrollOffset) plScrollOffset = row;
         if (row >= plScrollOffset + kPlVisibleRows) plScrollOffset = row - kPlVisibleRows + 1;
         plScrollOffset = std::max(0, plScrollOffset);
+    };
+
+    // Split out from the Save button's menu-item handling (below) so a
+    // debug hook can drive "the user picked Quick Save / already chose
+    // path X in Save As" without a live OS dialog - see
+    // --playlist-quick-save/--playlist-save-as.
+    auto quickSavePlaylist = [&]() { playlist.SaveM3U(plQuickSavePath); };
+    auto saveAsToPath = [&](const std::string& path) {
+        playlist.SaveM3U(path);
+        plQuickSavePath = path;
     };
 
     // Mirrors Listone.frm's CommandImg_Click, all 6 buttons (an earlier
@@ -1854,11 +1876,12 @@ int main(int argc, char** argv) {
                     }
                 }
                 break;
-            case 2: // Save - the original pops up a save-as menu
-                    // (frmMenu.mnuPlayList); there's no menu system here, so
-                    // this does the useful part directly: writes the current
-                    // list to a standard M3U (see Playlist::SaveM3U).
-                playlist.SaveM3U("xmad_playlist.m3u");
+            case 2: // Save - now pops a Quick Save/Save As menu (mirrors the
+                    // original's frmMenu.mnuPlayList popup - previously
+                    // stubbed as an unconditional write, since there was no
+                    // menu system here yet). The actual writes happen in
+                    // handlePlaylistClickAt once a choice is made.
+                plSaveMenuOpen = !plSaveMenuOpen;
                 break;
             case 3: // Up - mirrors SpostaItem(Su)
                 if (plSelected > 0) {
@@ -1887,6 +1910,7 @@ int main(int argc, char** argv) {
     CachedTextTexture plTitleTextCache;
     std::array<CachedTextTexture, kPlVisibleRows> plRowTextCache;
     CachedTextTexture plInfo0TextCache, plInfo1TextCache;
+    std::array<CachedTextTexture, 2> plSaveMenuTextCache; // Quick Save, Save As...
 
     auto drawPlaylistFrame = [&]() {
         SDL_SetRenderDrawColor(plRenderer, 0x10, 0x12, 0x09, 255);
@@ -1973,12 +1997,57 @@ int main(int argc, char** argv) {
             DrawTextureAt(plRenderer, plInfo1TextCache.Get(plRenderer, font, line1, kPlInfoW - 4), kPlInfoX + 3,
                           kPlInfoY1 + 3);
         }
+
+        if (plSaveMenuOpen) {
+            // Quick Save/Save As popup - see the layout comment on
+            // kPlSaveMenuX/Y for why it has to overlap the bottom of the
+            // list rather than sit in genuinely free space. Bevel::Draw
+            // fills an opaque background before bordering, so this fully
+            // obscures whatever list rows are underneath while open.
+            Bevel::Draw(plRenderer, kPlSaveMenuX, kPlSaveMenuY, kPlSaveMenuW, kPlSaveMenuH);
+            static const char* kSaveMenuItems[2] = {"QUICK SAVE", "SAVE AS..."};
+            for (int i = 0; i < 2; ++i) {
+                const int iy = kPlSaveMenuY + i * kPlSaveMenuItemH;
+                DrawTextureAt(plRenderer,
+                              plSaveMenuTextCache[static_cast<size_t>(i)].Get(plRenderer, font, kSaveMenuItems[i],
+                                                                               10 * gfx::BitmapFont::kCellW),
+                              kPlSaveMenuX + 2, iy + (kPlSaveMenuItemH - gfx::BitmapFont::kCellH) / 2);
+            }
+            SDL_SetRenderDrawColor(plRenderer, 0x23, 0x26, 0x20, 255);
+            SDL_RenderDrawLine(plRenderer, kPlSaveMenuX + 1, kPlSaveMenuY + kPlSaveMenuItemH,
+                                kPlSaveMenuX + kPlSaveMenuW - 2, kPlSaveMenuY + kPlSaveMenuItemH);
+        }
     };
 
     // Handles a click at logical (lx, ly) inside the playlist window;
     // returns true if it hit something. Shared by the real mouse handler
     // and the --playlist-click/--select-row debug hooks below.
     auto handlePlaylistClickAt = [&](int lx, int ly) {
+        if (plSaveMenuOpen) {
+            // Menu hit-test runs before anything else so a click meant for
+            // the popup never also falls through to a button/list row
+            // underneath it (the menu necessarily overlaps the bottom of
+            // the list - see kPlSaveMenuX/Y's comment in layout.h).
+            if (lx >= kPlSaveMenuX && lx < kPlSaveMenuX + kPlSaveMenuW && ly >= kPlSaveMenuY &&
+                ly < kPlSaveMenuY + kPlSaveMenuH) {
+                const int item = (ly - kPlSaveMenuY) / kPlSaveMenuItemH; // 0=Quick Save, 1=Save As...
+                plSaveMenuOpen = false;
+                if (item == 0) {
+                    quickSavePlaylist();
+                } else if (item == 1) {
+                    // No existing basename utility in this codebase to
+                    // reuse - a save dialog's "default name" wants just the
+                    // filename, not the full quick-save path.
+                    const auto slash = plQuickSavePath.find_last_of('/');
+                    const std::string defaultName =
+                        slash == std::string::npos ? plQuickSavePath : plQuickSavePath.substr(slash + 1);
+                    if (auto chosen = app::SaveNativeFileDialog(defaultName)) saveAsToPath(*chosen);
+                }
+            } else {
+                plSaveMenuOpen = false; // click outside the open menu: dismiss only
+            }
+            return;
+        }
         for (int i = 0; i < 6; ++i) {
             if (lx >= kPlButtonX[i] && lx < kPlButtonX[i] + kPlaylistBtnW && ly >= kPlaylistBtnY &&
                 ly < kPlaylistBtnY + kPlaylistBtnH) {
@@ -2433,6 +2502,25 @@ int main(int argc, char** argv) {
         handlePlaylistButtonPress(idx);
         std::cout << "playlist size after: " << playlist.size() << " selected=" << plSelected
                   << " currentIndex=" << playlist.currentIndex() << "\n";
+    }
+    if (playlistQuickSaveTest) {
+        // Debug hook: drives the exact same lambda the Quick Save menu
+        // item calls - doesn't touch the popup's open/closed state at
+        // all, just the write.
+        quickSavePlaylist();
+        std::ifstream check(plQuickSavePath);
+        std::cout << "quick-save target=" << plQuickSavePath << " wrote=" << (check.good() ? "yes" : "no") << "\n";
+    }
+    if (!playlistSaveAsTestPath.empty()) {
+        // Debug hook: drives the exact same lambda the Save As menu item
+        // calls once the user has picked a path. The live NSSavePanel/
+        // zenity dialog itself can't be driven headlessly, so this starts
+        // from "the OS already returned this path" instead of trying to
+        // script the dialog.
+        saveAsToPath(playlistSaveAsTestPath);
+        std::ifstream check(playlistSaveAsTestPath);
+        std::cout << "save-as wrote to " << playlistSaveAsTestPath << " (" << (check.good() ? "ok" : "FAILED")
+                   << "), quick-save target now=" << plQuickSavePath << "\n";
     }
 
     if (!clearReloadTestPath.empty()) {
@@ -3067,7 +3155,7 @@ int main(int argc, char** argv) {
                   << " aboutHidden=" << static_cast<bool>(SDL_GetWindowFlags(aboutWindow) & SDL_WINDOW_HIDDEN)
                   << " visPanel=" << static_cast<int>(visPanel) << " visMode=" << static_cast<int>(visMode)
                   << " plPos=(" << px << "," << py << ") eqPos=(" << ex << "," << ey << ")"
-                  << " positionSeconds=" << engine.positionSeconds() << "\n";
+                  << " positionSeconds=" << engine.positionSeconds() << " plSaveMenuOpen=" << plSaveMenuOpen << "\n";
     }
 
     if (hoverX >= 0 && hoverY >= 0) {
@@ -3192,7 +3280,7 @@ int main(int argc, char** argv) {
         if (plUserVisible && !plMinimized) {
             PlaylistFrameKey plKey{playlist.Generation(), playlist.currentIndex(), plSelected,
                                     plScrollOffset,        plPressedButton,        engine.sampleRate(),
-                                    engine.channels()};
+                                    engine.channels(),     plSaveMenuOpen};
             if (!lastPlKey || !(*lastPlKey == plKey)) {
                 drawPlaylistFrame();
                 SDL_RenderPresent(plRenderer);

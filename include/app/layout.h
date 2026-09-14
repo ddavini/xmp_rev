@@ -131,6 +131,18 @@ constexpr int kPlaylistUpX = kPlaylistSaveX + kPlaylistBtnPitch;
 constexpr int kPlaylistDownX = kPlaylistUpX + kPlaylistBtnPitch;
 constexpr int kPlaylistSeekX = kPlaylistDownX + kPlaylistBtnPitch;
 
+// Save button's popup menu (Quick Save / Save As...) - new, not in the
+// original (frmMenu.mnuPlayList was a real Win32 popup menu; there's no
+// menu system here). No free chrome exists to place this without
+// overlapping something (the window is only 140px tall, and the list and
+// button row already sit only 4px apart) - anchored flush against the
+// list area's own bottom edge so it never encroaches into the button row,
+// at the cost of covering the bottom two list rows while open.
+constexpr int kPlSaveMenuW = 64, kPlSaveMenuItemH = 12;
+constexpr int kPlSaveMenuH = kPlSaveMenuItemH * 2; // Quick Save, Save As...
+constexpr int kPlSaveMenuX = kPlaylistSaveX;
+constexpr int kPlSaveMenuY = kPlaylistListY + kPlaylistListH - kPlSaveMenuH;
+
 // xmDInfo(0)/(1): two scrolling status-line panels at the bottom right,
 // visible in a real screenshot - not implemented at all in an earlier pass.
 constexpr int kPlInfoX = kPlaylistSeekX + kPlaylistBtnPitch + 8;

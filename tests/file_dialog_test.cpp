@@ -8,6 +8,7 @@
 #include <cstdio>
 
 using xmad::app::ParseDialogOutput;
+using xmad::app::TrimTrailingNewline;
 
 namespace {
 int g_failures = 0;
@@ -54,6 +55,15 @@ int main() {
         auto r = ParseDialogOutput("/music/a.mp3\r\n/music/b.flac\r\n");
         Check(r.size() == 2 && r[0] == "/music/a.mp3", "CRLF: \\r stripped from first path");
         Check(r.size() == 2 && r[1] == "/music/b.flac", "CRLF: \\r stripped from second path");
+    }
+
+    // TrimTrailingNewline - the single-path analogue used by
+    // SaveNativeFileDialog (which pops a live dialog, so not testable here).
+    {
+        Check(TrimTrailingNewline("/music/out.m3u\n") == "/music/out.m3u", "trim: trailing LF");
+        Check(TrimTrailingNewline("/music/out.m3u\r\n") == "/music/out.m3u", "trim: trailing CRLF");
+        Check(TrimTrailingNewline("/music/out.m3u") == "/music/out.m3u", "trim: no trailing newline, unchanged");
+        Check(TrimTrailingNewline("") == "", "trim: empty input stays empty");
     }
 
     if (g_failures == 0) {
