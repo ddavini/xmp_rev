@@ -24,8 +24,8 @@ AUDIO_OBJS := $(patsubst src/%.cpp,$(BUILD)/%.o,$(AUDIO_SRCS))
 UNAME_S := $(shell uname -s)
 
 ifeq ($(UNAME_S),Darwin)
-APP_OBJS += $(BUILD)/app/menu_bar_icon.o
-FRAMEWORKS := -framework Cocoa
+APP_OBJS += $(BUILD)/app/menu_bar_icon.o $(BUILD)/app/media_remote.o
+FRAMEWORKS := -framework Cocoa -framework MediaPlayer
 else
 FRAMEWORKS :=
 endif

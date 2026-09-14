@@ -25,6 +25,7 @@
 #include "app/file_dialog.h"
 #include "app/layout.h"
 #ifdef __APPLE__
+#include "app/media_remote.h"
 #include "app/menu_bar_icon.h"
 #endif
 #include "app/playlist.h"
@@ -488,6 +489,14 @@ int main(int argc, char** argv) {
     // later, which was indistinguishable from a real click and caused
     // the app to immediately undo its own minimize.
     const Uint32 kTrayRestoreEventType = SDL_RegisterEvents(1);
+
+    // Bluetooth headphones/AirPods/car-stereo play-pause-next-previous
+    // presses arrive as MPRemoteCommandCenter callbacks (media_remote.mm),
+    // which fire on whatever thread/queue the system chooses - bridged
+    // into the SDL event queue the same way as kTrayRestoreEventType
+    // above, then handled in processEvent below.
+    const Uint32 kMediaRemoteEventType = SDL_RegisterEvents(1);
+    app::EnableMediaRemoteCommands(kMediaRemoteEventType);
 #endif
 
     const int scale = 1;
@@ -1129,10 +1138,19 @@ int main(int argc, char** argv) {
 
     // Opens playlist[idx] and starts it playing, keeping playlist's
     // currentIndex_ in sync (mirrors PlayStream's IndiceGlobalissimo update).
+    // Bluetooth/Control Center Now Playing info (macOS-only) needs the
+    // current track's display name, which needs getPlaylistDisplayName -
+    // not yet declared this far up. Same deferred-std::function trick as
+    // onEjectRequested below, assigned its real body once
+    // getPlaylistDisplayName exists. No-op on non-Darwin builds, where
+    // this stays the do-nothing default forever.
+    std::function<void(bool)> notifyNowPlayingChanged = [](bool) {};
+
     auto openPlaylistIndex = [&](int idx) {
         if (idx < 0 || static_cast<size_t>(idx) >= playlist.size()) return;
         playlist.SetCurrentIndex(idx);
         engine.Open(playlist.at(static_cast<size_t>(idx)));
+        notifyNowPlayingChanged(true);
     };
 
     // handleTransportPress (Eject, below) needs to add files to the
@@ -1157,6 +1175,7 @@ int main(int argc, char** argv) {
                 if (engine.state() == audio::PlayState::Paused) {
                     // Resume.
                     engine.Play();
+                    notifyNowPlayingChanged(true);
                 } else if (engine.channels() != 0) {
                     // Mirrors the original: pressing Play while already
                     // playing restarts the current track from the
@@ -1164,14 +1183,17 @@ int main(int argc, char** argv) {
                     // unconditionally in the non-paused branch).
                     engine.SeekSeconds(0.0);
                     engine.Play();
+                    notifyNowPlayingChanged(true);
                 } else if (!playlist.empty()) {
                     // Nothing open yet: start from the armed index (or 0).
+                    // openPlaylistIndex notifies on its own.
                     openPlaylistIndex(playlist.currentIndex() >= 0 ? playlist.currentIndex() : 0);
                 }
                 break;
             case TransportAction::Stop:
                 userStoppedTrack = true;
                 engine.Stop();
+                notifyNowPlayingChanged(false);
                 break;
             case TransportAction::Pause:
                 // Original: mStreamIsActive ? mPauseStream : mResumeStream -
@@ -1179,8 +1201,10 @@ int main(int argc, char** argv) {
                 if (engine.channels() == 0) break;
                 if (engine.state() == audio::PlayState::Playing) {
                     engine.Pause();
+                    notifyNowPlayingChanged(false);
                 } else {
                     engine.Play();
+                    notifyNowPlayingChanged(true);
                 }
                 break;
             case TransportAction::Back:
@@ -1267,6 +1291,14 @@ int main(int argc, char** argv) {
         }
         return title.empty() ? BaseName(path) : title;
     };
+
+#ifdef __APPLE__
+    notifyNowPlayingChanged = [&](bool isPlaying) {
+        if (playlist.empty() || playlist.currentIndex() < 0) return;
+        app::UpdateNowPlayingInfo(getPlaylistDisplayName(static_cast<size_t>(playlist.currentIndex())),
+                                   engine.durationSeconds(), engine.positionSeconds(), isPlaying);
+    };
+#endif
 
     CachedTextTexture marqueeTextCache, durationTextCache, freqTextCache, volTextCache, bitRateTextCache;
     CachedTextTexture peakLLabelCache, peakRLabelCache; // "L"/"R" next to the peak meter row (TODO)
@@ -2840,6 +2872,18 @@ int main(int argc, char** argv) {
         // only thing that ever posts this event type.
         if (ev.type == kTrayRestoreEventType) {
             exitAppTray();
+        }
+        // Posted by media_remote.mm's MPRemoteCommandCenter handlers -
+        // Bluetooth headphones/AirPods/car-stereo play-pause-next-previous
+        // presses. Previous maps to Back, matching the Play/Stop/Next/
+        // Pause/Back/Eject vocabulary handleTransportPress already speaks.
+        if (ev.type == kMediaRemoteEventType) {
+            switch (static_cast<app::MediaRemoteCommand>(ev.user.code)) {
+                case app::MediaRemoteCommand::Play: handleTransportPress(TransportAction::Play); break;
+                case app::MediaRemoteCommand::Pause: handleTransportPress(TransportAction::Pause); break;
+                case app::MediaRemoteCommand::Next: handleTransportPress(TransportAction::Next); break;
+                case app::MediaRemoteCommand::Previous: handleTransportPress(TransportAction::Back); break;
+            }
         }
 #else
         if (ev.type == SDL_WINDOWEVENT && (ev.window.event == SDL_WINDOWEVENT_MINIMIZED ||
