@@ -25,7 +25,7 @@ UNAME_S := $(shell uname -s)
 
 ifeq ($(UNAME_S),Darwin)
 APP_OBJS += $(BUILD)/app/menu_bar_icon.o $(BUILD)/app/media_remote.o
-FRAMEWORKS := -framework Cocoa -framework MediaPlayer
+FRAMEWORKS := -framework Cocoa -framework MediaPlayer -framework CoreFoundation
 else
 FRAMEWORKS :=
 endif

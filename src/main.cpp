@@ -15,6 +15,7 @@
 #include <vector>
 
 #ifdef __APPLE__
+#include <CoreFoundation/CoreFoundation.h>
 #include <mach-o/dyld.h>
 #include <climits>
 #elif defined(__linux__)
@@ -524,6 +525,17 @@ int main(int argc, char** argv) {
         std::cerr << "SDL_CreateWindow failed: " << SDL_GetError() << "\n";
         return 1;
     }
+
+#ifdef __APPLE__
+    // Explicitly activates the app (SetDockIconVisible(true) already does
+    // this as a side effect of its normal tray-restore job, reused here
+    // rather than adding a near-duplicate function) - a plain SDL-created
+    // window isn't guaranteed to leave the app genuinely "active" the way
+    // a normal Finder/Dock launch does, and MPRemoteCommandCenter/
+    // MPNowPlayingInfoCenter registration made before that appears not to
+    // stick reliably (see media_remote.h).
+    app::SetDockIconVisible(true);
+#endif
 
     // Software renderer: these are simple 2D sprite blits (no need for GPU
     // acceleration), and it draws into a CPU-side buffer that doesn't
@@ -1294,10 +1306,32 @@ int main(int argc, char** argv) {
 
 #ifdef __APPLE__
     notifyNowPlayingChanged = [&](bool isPlaying) {
-        if (playlist.empty() || playlist.currentIndex() < 0) return;
-        app::UpdateNowPlayingInfo(getPlaylistDisplayName(static_cast<size_t>(playlist.currentIndex())),
-                                   engine.durationSeconds(), engine.positionSeconds(), isPlaying);
+        if (playlist.empty()) return;
+        // Falls back to the first track when nothing's armed yet (mirrors
+        // TransportAction::Play's own "nothing open yet: start from the
+        // armed index, or 0" fallback) - without this, a playlist that's
+        // been loaded/dropped-onto but never actually played leaves
+        // currentIndex() at -1 forever, so this claim never fires and a
+        // first Bluetooth press falls through to macOS's default handler
+        // (Apple Music) instead of reaching this app at all, even though
+        // there's a full queue sitting right here ready to go.
+        const size_t idx =
+            playlist.currentIndex() >= 0 ? static_cast<size_t>(playlist.currentIndex()) : 0;
+        app::UpdateNowPlayingInfo(getPlaylistDisplayName(idx), engine.durationSeconds(), engine.positionSeconds(),
+                                   isPlaying);
     };
+    // The startup auto-open above (resumeSession's wasPlaying branch, and
+    // the plain positional-tracks branch) calls engine.Open() directly
+    // rather than through openPlaylistIndex, and runs before this lambda
+    // even has its real body assigned - so a track that starts playing
+    // right at launch never got a Now Playing claim in for it at all
+    // until the periodic refresh caught up seconds later. Catches up
+    // immediately instead - unconditionally on the playlist being
+    // non-empty, not just when something's already playing, so a loaded
+    // but not-yet-played queue also claims a provisional (paused) Now
+    // Playing status right away rather than waiting on the periodic
+    // refresh below.
+    notifyNowPlayingChanged(engine.state() == audio::PlayState::Playing);
 #endif
 
     CachedTextTexture marqueeTextCache, durationTextCache, freqTextCache, volTextCache, bitRateTextCache;
@@ -3381,6 +3415,16 @@ int main(int argc, char** argv) {
     }
 
     audio::PlayState lastEngineState = engine.state();
+    // Now Playing info (Control Center/lock screen/Bluetooth remote
+    // status) is otherwise only pushed on explicit state-change events
+    // (see notifyNowPlayingChanged's call sites) - a periodic refresh on
+    // top of that guards against macOS treating a long-untouched app as
+    // stale and handing "current Now Playing app" status to something
+    // else, which is what actually gates whether Bluetooth commands
+    // route here at all. No-ops harmlessly on non-Darwin, where
+    // notifyNowPlayingChanged is permanently the default do-nothing
+    // lambda.
+    Uint32 lastNowPlayingRefresh = 0;
     std::optional<PlaylistFrameKey> lastPlKey;
     std::optional<EqFrameKey> lastEqKey;
     std::optional<InfoFrameKey> lastInfoKey;
@@ -3390,6 +3434,22 @@ int main(int argc, char** argv) {
 
         SDL_Event ev;
         while (SDL_PollEvent(&ev)) processEvent(ev);
+
+#ifdef __APPLE__
+        // SDL's Cocoa backend pumps only the specific event mask it asks
+        // for (SDL_PumpEvents -> nextEventMatchingMask), not the full
+        // default-mode CFRunLoop - callbacks delivered via CoreFoundation
+        // run-loop sources never fire without this, which is how
+        // MPRemoteCommandCenter's command blocks actually arrive from the
+        // system's mediaremoted (registering a command succeeds either
+        // way; only the callback delivery itself was silently starved).
+        // Non-blocking: returns immediately once a pending source is
+        // serviced, or right away if none is. Same technique/parameters
+        // (bar the timeout) a real SDL project (MAME's SDL3 backend)
+        // needed for GCController's async device discovery, for the same
+        // underlying reason - see libsdl-org/SDL#11742.
+        CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0, true);
+#endif
 
         // Polled every frame (not just on SDL_MOUSEMOTION) so a fast drag
         // that outruns the window - leaving it stranded outside every xmad
@@ -3417,6 +3477,11 @@ int main(int argc, char** argv) {
             userStoppedTrack = false;
         }
         lastEngineState = engine.state();
+
+        if (!playlist.empty() && frameStart - lastNowPlayingRefresh >= 5000) {
+            lastNowPlayingRefresh = frameStart;
+            notifyNowPlayingChanged(curEngineState == audio::PlayState::Playing);
+        }
 
         if (autoAdvanceDeadline != 0 && playlist.currentIndex() != lastLoggedIndex) {
             lastLoggedIndex = playlist.currentIndex();
