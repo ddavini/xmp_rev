@@ -143,6 +143,17 @@ constexpr int kPlSaveMenuH = kPlSaveMenuItemH * 2; // Quick Save, Save As...
 constexpr int kPlSaveMenuX = kPlaylistSaveX;
 constexpr int kPlSaveMenuY = kPlaylistListY + kPlaylistListH - kPlSaveMenuH;
 
+// Clear button's "Are you sure?" confirmation popup (TODO: "clear
+// playlist pops a window up that asks 'Are you sure you?'") - same popup
+// style/row height as the Save menu above (kPlSaveMenuItemH), anchored
+// under Clear instead of Save, tall enough for a label row ("CLEAR
+// PLAYLIST?", 15 chars) plus YES/NO.
+constexpr int kPlClearConfirmItems = 3; // label + YES + NO
+constexpr int kPlClearConfirmW = 84;    // fits "CLEAR PLAYLIST?" (15 chars * 5px + margin)
+constexpr int kPlClearConfirmH = kPlSaveMenuItemH * kPlClearConfirmItems;
+constexpr int kPlClearConfirmX = kPlaylistClearX;
+constexpr int kPlClearConfirmY = kPlaylistListY + kPlaylistListH - kPlClearConfirmH;
+
 // xmDInfo(0)/(1): two scrolling status-line panels at the bottom right,
 // visible in a real screenshot - not implemented at all in an earlier pass.
 constexpr int kPlInfoX = kPlaylistSeekX + kPlaylistBtnPitch + 8;

@@ -150,6 +150,7 @@ struct PlaylistFrameKey {
     unsigned sampleRate = 0;
     unsigned channels = 0;
     bool saveMenuOpen = false;
+    bool clearConfirmOpen = false;
     bool operator==(const PlaylistFrameKey&) const = default;
 };
 
@@ -1836,6 +1837,7 @@ int main(int argc, char** argv) {
     // retargeted by a successful Save As. In-memory only, not persisted
     // across restarts (not asked for).
     std::string plQuickSavePath = "xmad_playlist.m3u";
+    bool plClearConfirmOpen = false; // "Are you sure?" popup (see the Clear button below)
 
     auto ensureRowVisible = [&](int row) {
         if (row < plScrollOffset) plScrollOffset = row;
@@ -1853,19 +1855,34 @@ int main(int argc, char** argv) {
         plQuickSavePath = path;
     };
 
+    // Split out from the Clear button's confirmation popup (below) for the
+    // same reason as quickSavePlaylist/saveAsToPath above: --clear-reload-
+    // test calls this directly to exercise the real Clear->Add->Play
+    // engine sequence without going through (and being gated by) the
+    // confirmation UI, which isn't what that regression test is about.
+    auto clearPlaylist = [&]() {
+        // Mirrors Clear_Click -> StopAll -> mStopStream: fully releases the
+        // open track, not just Stop() (which deliberately leaves the
+        // decoder loaded so Play can restart it - wrong here, since
+        // there's nothing left in the list for a restarted track to
+        // belong to).
+        engine.Close();
+        playlist.Clear();
+        plSelected = -1;
+    };
+
     // Mirrors Listone.frm's CommandImg_Click, all 6 buttons (an earlier
     // pass here only implemented indices 0/1/2/3 of the original's 0-5 -
     // Save and Seek were missing entirely, not just decorative).
     auto handlePlaylistButtonPress = [&](int idx) {
         switch (idx) {
-            case 0: // Clear - mirrors Clear_Click -> StopAll -> mStopStream:
-                    // fully releases the open track, not just Stop() (which
-                    // deliberately leaves the decoder loaded so Play can
-                    // restart it - wrong here, since there's nothing left
-                    // in the list for a restarted track to belong to).
-                engine.Close();
-                playlist.Clear();
-                plSelected = -1;
+            case 0: // Clear - now asks for confirmation first (TODO:
+                    // "clear playlist pops a window up that asks 'Are you
+                    // sure you?'" - previously cleared unconditionally).
+                    // The actual clear happens in handlePlaylistClickAt
+                    // once confirmed. Only one popup at a time.
+                plSaveMenuOpen = false;
+                plClearConfirmOpen = !plClearConfirmOpen;
                 break;
             case 1: // Delete - mirrors ListaMp3_KeyPress("d")
                 if (plSelected >= 0 && static_cast<size_t>(plSelected) < playlist.size()) {
@@ -1880,7 +1897,9 @@ int main(int argc, char** argv) {
                     // original's frmMenu.mnuPlayList popup - previously
                     // stubbed as an unconditional write, since there was no
                     // menu system here yet). The actual writes happen in
-                    // handlePlaylistClickAt once a choice is made.
+                    // handlePlaylistClickAt once a choice is made. Only one
+                    // popup at a time.
+                plClearConfirmOpen = false;
                 plSaveMenuOpen = !plSaveMenuOpen;
                 break;
             case 3: // Up - mirrors SpostaItem(Su)
@@ -1911,6 +1930,7 @@ int main(int argc, char** argv) {
     std::array<CachedTextTexture, kPlVisibleRows> plRowTextCache;
     CachedTextTexture plInfo0TextCache, plInfo1TextCache;
     std::array<CachedTextTexture, 2> plSaveMenuTextCache; // Quick Save, Save As...
+    std::array<CachedTextTexture, 3> plClearConfirmTextCache; // label, YES, NO
 
     auto drawPlaylistFrame = [&]() {
         SDL_SetRenderDrawColor(plRenderer, 0x10, 0x12, 0x09, 255);
@@ -2017,12 +2037,59 @@ int main(int argc, char** argv) {
             SDL_RenderDrawLine(plRenderer, kPlSaveMenuX + 1, kPlSaveMenuY + kPlSaveMenuItemH,
                                 kPlSaveMenuX + kPlSaveMenuW - 2, kPlSaveMenuY + kPlSaveMenuItemH);
         }
+
+        if (plClearConfirmOpen) {
+            // "Are you sure?" popup for Clear - same popup style as the
+            // Save menu above (Bevel::Draw fully obscures the list rows
+            // underneath while open). Row 0 is an inert label, not a
+            // button - only YES (1) and NO (2) act, see
+            // handlePlaylistClickAt.
+            Bevel::Draw(plRenderer, kPlClearConfirmX, kPlClearConfirmY, kPlClearConfirmW, kPlClearConfirmH);
+            static const char* kClearConfirmItems[3] = {"CLEAR PLAYLIST?", "YES", "NO"};
+            static const int kClearConfirmItemChars[3] = {15, 3, 2};
+            for (int i = 0; i < 3; ++i) {
+                const int iy = kPlClearConfirmY + i * kPlSaveMenuItemH;
+                DrawTextureAt(plRenderer,
+                              plClearConfirmTextCache[static_cast<size_t>(i)].Get(
+                                  plRenderer, font, kClearConfirmItems[i],
+                                  kClearConfirmItemChars[i] * gfx::BitmapFont::kCellW),
+                              kPlClearConfirmX + 2, iy + (kPlSaveMenuItemH - gfx::BitmapFont::kCellH) / 2);
+                if (i < 2) {
+                    SDL_SetRenderDrawColor(plRenderer, 0x23, 0x26, 0x20, 255);
+                    SDL_RenderDrawLine(plRenderer, kPlClearConfirmX + 1, iy + kPlSaveMenuItemH,
+                                        kPlClearConfirmX + kPlClearConfirmW - 2, iy + kPlSaveMenuItemH);
+                }
+            }
+        }
     };
 
     // Handles a click at logical (lx, ly) inside the playlist window;
     // returns true if it hit something. Shared by the real mouse handler
     // and the --playlist-click/--select-row debug hooks below.
     auto handlePlaylistClickAt = [&](int lx, int ly) {
+        if (plClearConfirmOpen) {
+            // Same hit-test-first reasoning as the Save menu below - and
+            // mutually exclusive with it by construction (see
+            // handlePlaylistButtonPress), so checking this one first is
+            // safe regardless of which popup (if either) is actually open.
+            if (lx >= kPlClearConfirmX && lx < kPlClearConfirmX + kPlClearConfirmW && ly >= kPlClearConfirmY &&
+                ly < kPlClearConfirmY + kPlClearConfirmH) {
+                const int item = (ly - kPlClearConfirmY) / kPlSaveMenuItemH; // 0=label, 1=YES, 2=NO
+                plClearConfirmOpen = false;
+                if (item == 1) {
+                    clearPlaylist();
+                } else if (item == 0) {
+                    // Clicked the inert label row - not a button, leave
+                    // the popup open (undo the close above) rather than
+                    // silently dismissing on a non-actionable click.
+                    plClearConfirmOpen = true;
+                }
+                // item == 2 (NO) falls through with the popup already closed.
+            } else {
+                plClearConfirmOpen = false; // click outside the open popup: dismiss only
+            }
+            return;
+        }
         if (plSaveMenuOpen) {
             // Menu hit-test runs before anything else so a click meant for
             // the popup never also falls through to a button/list row
@@ -2534,7 +2601,7 @@ int main(int argc, char** argv) {
         std::cout << "clear-reload-test: before clear: playlist size=" << playlist.size()
                   << " engine.channels()=" << engine.channels() << " duration=" << engine.durationSeconds()
                   << "\n";
-        handlePlaylistButtonPress(0); // Clear
+        clearPlaylist(); // Clear - bypasses the confirmation popup on purpose (see clearPlaylist's comment)
         std::cout << "clear-reload-test: after clear: playlist size=" << playlist.size()
                   << " engine.channels()=" << engine.channels() << "\n";
         handleDroppedFile(clearReloadTestPath); // add the new track (mirrors a drag-drop / Eject add)
@@ -3155,7 +3222,8 @@ int main(int argc, char** argv) {
                   << " aboutHidden=" << static_cast<bool>(SDL_GetWindowFlags(aboutWindow) & SDL_WINDOW_HIDDEN)
                   << " visPanel=" << static_cast<int>(visPanel) << " visMode=" << static_cast<int>(visMode)
                   << " plPos=(" << px << "," << py << ") eqPos=(" << ex << "," << ey << ")"
-                  << " positionSeconds=" << engine.positionSeconds() << " plSaveMenuOpen=" << plSaveMenuOpen << "\n";
+                  << " positionSeconds=" << engine.positionSeconds() << " plSaveMenuOpen=" << plSaveMenuOpen
+                  << " plClearConfirmOpen=" << plClearConfirmOpen << "\n";
     }
 
     if (hoverX >= 0 && hoverY >= 0) {
@@ -3280,7 +3348,7 @@ int main(int argc, char** argv) {
         if (plUserVisible && !plMinimized) {
             PlaylistFrameKey plKey{playlist.Generation(), playlist.currentIndex(), plSelected,
                                     plScrollOffset,        plPressedButton,        engine.sampleRate(),
-                                    engine.channels(),     plSaveMenuOpen};
+                                    engine.channels(),     plSaveMenuOpen,         plClearConfirmOpen};
             if (!lastPlKey || !(*lastPlKey == plKey)) {
                 drawPlaylistFrame();
                 SDL_RenderPresent(plRenderer);

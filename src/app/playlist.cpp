@@ -57,11 +57,21 @@ int Playlist::WrappedIndex(int delta) const {
 bool Playlist::LoadM3U(const std::string& path) {
     std::ifstream in(path);
     if (!in) return false;
+    // A relative entry is resolved against the M3U file's own directory,
+    // not the process's cwd - the only interpretation that makes a
+    // playlist usable independently of wherever the app happens to be
+    // launched from, and what every other M3U-reading player does. Bare
+    // filenames (no path at all) are the common case for a playlist saved
+    // alongside its own tracks - previously these only "worked" by
+    // coincidence when cwd already happened to be that same directory.
+    const auto slash = path.find_last_of('/');
+    const std::string dir = slash == std::string::npos ? "" : path.substr(0, slash + 1);
     std::string line;
     while (std::getline(in, line)) {
         while (!line.empty() && (line.back() == '\r' || line.back() == '\n')) line.pop_back();
         if (line.empty() || line[0] == '#') continue;
-        tracks_.push_back(line);
+        const bool isAbsolute = line[0] == '/';
+        tracks_.push_back(isAbsolute || dir.empty() ? line : dir + line);
         ++generation_;
     }
     return true;

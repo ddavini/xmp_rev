@@ -114,6 +114,11 @@ $(BUILD)/tags_test: tests/tags_test.cpp $(BUILD)/audio/tags.o $(BUILD)/audio/dr_
 	@mkdir -p $(BUILD)
 	$(CXX) -std=c++20 -O2 -Wall -Wextra -Iinclude -Ithird_party $^ -o $@
 
+# --- playlist M3U load/save (relative-path resolution) test - no SDL ---------
+$(BUILD)/playlist_test: tests/playlist_test.cpp $(BUILD)/app/playlist.o
+	@mkdir -p $(BUILD)
+	$(CXX) -std=c++20 -O2 -Wall -Wextra -Iinclude $^ -o $@
+
 # --- the app -------------------------------------------------------------------
 $(BUILD)/xmad: $(BUILD)/main.o $(GFX_OBJS) $(APP_OBJS) $(DSP_OBJS) $(AUDIO_OBJS)
 	@mkdir -p $(BUILD)
@@ -140,7 +145,7 @@ $(APP_BUNDLE): $(BUILD)/xmad assets/icon/Info.plist assets/icon/AppIcon.icns $(w
 	touch "$(APP_BUNDLE)"
 endif
 
-test: $(BUILD)/fft_smoke_test $(BUILD)/font_render_test $(BUILD)/decoder_test $(BUILD)/engine_smoke_test $(BUILD)/eq_test $(BUILD)/window_snap_test $(BUILD)/file_dialog_test $(BUILD)/session_test $(BUILD)/stereo_widen_test $(BUILD)/tags_test $(BUILD)/level_meter_test
+test: $(BUILD)/fft_smoke_test $(BUILD)/font_render_test $(BUILD)/decoder_test $(BUILD)/engine_smoke_test $(BUILD)/eq_test $(BUILD)/window_snap_test $(BUILD)/file_dialog_test $(BUILD)/session_test $(BUILD)/stereo_widen_test $(BUILD)/tags_test $(BUILD)/level_meter_test $(BUILD)/playlist_test
 	./$(BUILD)/fft_smoke_test
 	./$(BUILD)/font_render_test "../xmplayer/Source/Img_new/DISPLAY.bmp" $(BUILD)/font_render.raw
 	./$(BUILD)/decoder_test
@@ -152,6 +157,7 @@ test: $(BUILD)/fft_smoke_test $(BUILD)/font_render_test $(BUILD)/decoder_test $(
 	./$(BUILD)/stereo_widen_test
 	./$(BUILD)/tags_test
 	./$(BUILD)/level_meter_test
+	./$(BUILD)/playlist_test
 
 ifeq ($(UNAME_S),Darwin)
 # Launched through the .app bundle via `open` (not the raw binary) so

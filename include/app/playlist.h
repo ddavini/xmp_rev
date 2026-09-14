@@ -58,7 +58,8 @@ public:
     // Standard M3U (a portable, well-known format) rather than the
     // original's idiosyncratic .ls layout - #EXTM3U/#EXTINF lines are
     // skipped on read and not written, since duration/title metadata isn't
-    // tracked here.
+    // tracked here. LoadM3U resolves relative entries against path's own
+    // directory (not the process's cwd), matching every other M3U reader.
     bool LoadM3U(const std::string& path);
     bool SaveM3U(const std::string& path) const;
 
