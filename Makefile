@@ -23,6 +23,13 @@ AUDIO_OBJS := $(patsubst src/%.cpp,$(BUILD)/%.o,$(AUDIO_SRCS))
 
 UNAME_S := $(shell uname -s)
 
+ifeq ($(UNAME_S),Darwin)
+APP_OBJS += $(BUILD)/app/menu_bar_icon.o
+FRAMEWORKS := -framework Cocoa
+else
+FRAMEWORKS :=
+endif
+
 .PHONY: all test run clean
 
 ifeq ($(UNAME_S),Darwin)
@@ -34,6 +41,12 @@ endif
 $(BUILD)/%.o: src/%.cpp
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+ifeq ($(UNAME_S),Darwin)
+$(BUILD)/app/%.o: src/app/%.mm
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) -fobjc-arc -c $< -o $@
+endif
 
 $(BUILD)/main.o: src/main.cpp
 	@mkdir -p $(dir $@)
@@ -104,7 +117,7 @@ $(BUILD)/tags_test: tests/tags_test.cpp $(BUILD)/audio/tags.o $(BUILD)/audio/dr_
 # --- the app -------------------------------------------------------------------
 $(BUILD)/xmad: $(BUILD)/main.o $(GFX_OBJS) $(APP_OBJS) $(DSP_OBJS) $(AUDIO_OBJS)
 	@mkdir -p $(BUILD)
-	$(CXX) $(CXXFLAGS) $^ -o $@ $(SDL2_LIBS)
+	$(CXX) $(CXXFLAGS) $^ -o $@ $(SDL2_LIBS) $(FRAMEWORKS)
 
 # --- macOS .app bundle, so a Dock/Finder icon (the real extracted SKULL.ico
 # resource) actually applies - a bare Unix executable gets the generic

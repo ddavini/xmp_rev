@@ -24,6 +24,9 @@
 
 #include "app/file_dialog.h"
 #include "app/layout.h"
+#ifdef __APPLE__
+#include "app/menu_bar_icon.h"
+#endif
 #include "app/playlist.h"
 #include "app/session.h"
 #include "app/version.h"
@@ -468,6 +471,17 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+#ifdef __APPLE__
+    // A dedicated custom event code for "menu-bar tray icon was clicked",
+    // rather than reusing SDL_WINDOWEVENT_RESTORED/FOCUS_GAINED: an
+    // earlier version did that, but hiding Main + switching the app's
+    // activation policy (see enterAppTray below) turned out to itself
+    // generate a spurious event of that same shape for Main moments
+    // later, which was indistinguishable from a real click and caused
+    // the app to immediately undo its own minimize.
+    const Uint32 kTrayRestoreEventType = SDL_RegisterEvents(1);
+#endif
+
     const int scale = 1;
     // Borderless: matches the original's BorderStyle=0 (fully custom-drawn,
     // no OS title bar/chrome). This means there's no native close button or
@@ -611,6 +625,88 @@ int main(int argc, char** argv) {
     // marked minimized can trigger the cascade back out.
     bool mainMinimized = false, eqMinimized = false, plMinimized = false, infoMinimized = false,
          aboutMinimized = false;
+#ifdef __APPLE__
+    // Separate from the per-window *Minimized bools above: those can each
+    // flip multiple times during one user minimize/restore action (every
+    // cascaded window fires its own real MINIMIZED/RESTORED event), but the
+    // Dock-hide/menu-bar-show swap must happen exactly once per action - on
+    // the transition into "something is minimized" and back out. Guarded on
+    // this bool at the two call sites below rather than on any per-window
+    // state.
+    bool appHiddenToTray = false;
+
+    // Enter/exit tray state by hiding/showing windows directly, never by
+    // routing Main through a real OS miniaturize (SDL_MinimizeWindow):
+    // that was tried first and broke restoring Main specifically (EQ/PL,
+    // which were only ever plain-hidden, restored fine; Main, which had
+    // actually been miniaturized by the click handler before this code
+    // forced it hidden out from under that state, then didn't reliably
+    // come back via SDL_ShowWindow - SDL's Cocoa backend tracks
+    // miniaturized-vs-hidden internally via NSWindow delegate callbacks,
+    // and calling orderOut: on an already-miniaturized window doesn't
+    // fire windowDidDeminiaturize:, leaving that bookkeeping stale).
+    // Called directly from the minimize button's click handler (bypassing
+    // SDL_MinimizeWindow/the MINIMIZED event entirely for the normal
+    // path) and from the menu-bar icon's synthetic restore event.
+    auto enterAppTray = [&]() {
+        if (appHiddenToTray) return;
+        appHiddenToTray = true;
+        mainMinimized = true;
+        SDL_HideWindow(window);
+        if (eqUserVisible) {
+            eqMinimized = true;
+            SDL_HideWindow(eqWindow);
+        }
+        if (plUserVisible) {
+            plMinimized = true;
+            SDL_HideWindow(plWindow);
+        }
+        if (infoUserVisible) {
+            infoMinimized = true;
+            SDL_HideWindow(infoWindow);
+        }
+        if (aboutUserVisible) {
+            aboutMinimized = true;
+            SDL_HideWindow(aboutWindow);
+        }
+        // Add the new access point before removing the old one, so
+        // there's never a moment with neither a Dock icon nor a
+        // menu-bar icon available to click.
+        app::ShowMenuBarIcon(kTrayRestoreEventType);
+        app::SetDockIconVisible(false);
+    };
+    auto exitAppTray = [&]() {
+        if (!appHiddenToTray) return;
+        appHiddenToTray = false;
+        // Reactivate *before* showing/raising anything below: an
+        // Accessory-policy app isn't guaranteed to come to the
+        // foreground just because a window gets ordered front.
+        app::SetDockIconVisible(true);
+        // Fixed order (About, Info, Playlist, EQ, then Main last) -
+        // matches the pre-existing restore-order convention elsewhere in
+        // this file so the resulting window stacking looks the same.
+        if (aboutMinimized) {
+            aboutMinimized = false;
+            SDL_ShowWindow(aboutWindow);
+        }
+        if (infoMinimized) {
+            infoMinimized = false;
+            SDL_ShowWindow(infoWindow);
+        }
+        if (plMinimized) {
+            plMinimized = false;
+            SDL_ShowWindow(plWindow);
+        }
+        if (eqMinimized) {
+            eqMinimized = false;
+            SDL_ShowWindow(eqWindow);
+        }
+        mainMinimized = false;
+        SDL_ShowWindow(window);
+        SDL_RaiseWindow(window);
+        app::HideMenuBarIcon();
+    };
+#endif
 
     // Shared by the PL/EQ toggle buttons on Main and by the Info button
     // (defined this early, rather than down with the rest of the event
@@ -2514,9 +2610,69 @@ int main(int argc, char** argv) {
             else if (ev.window.windowID == infoWindowID) { infoUserVisible = false; SDL_HideWindow(infoWindow); }
             else if (ev.window.windowID == aboutWindowID) { aboutUserVisible = false; SDL_HideWindow(aboutWindow); }
         }
+#ifdef __APPLE__
+        // Only reachable if something other than the minimize button
+        // triggered a real OS miniaturize - the button itself calls
+        // enterAppTray() directly (see its click handler), so the normal
+        // path never lets any window genuinely miniaturize at all, and
+        // never posts real SDL_WINDOWEVENT_RESTORED/FOCUS_GAINED either
+        // (restoring is driven entirely by kTrayRestoreEventType below,
+        // not by this block). Converts to the same tray-hidden state
+        // either way, then immediately un-miniaturizes whichever window
+        // actually got miniaturized (same no-Dock-tile reasoning as
+        // enterAppTray's own comment).
+        if (ev.type == SDL_WINDOWEVENT && ev.window.event == SDL_WINDOWEVENT_MINIMIZED) {
+            enterAppTray();
+            SDL_Window* w = SDL_GetWindowFromID(ev.window.windowID);
+            if (w) SDL_HideWindow(w);
+        }
+        // Deliberately a dedicated custom event, not
+        // SDL_WINDOWEVENT_RESTORED/FOCUS_GAINED: an earlier version
+        // reacted to those instead, but hiding Main + switching the
+        // app's activation policy in enterAppTray() turned out to itself
+        // generate a spurious event of that same shape for Main
+        // moments later, indistinguishable from a real menu-bar click,
+        // which made the app immediately undo its own minimize. See
+        // ShowMenuBarIcon's click handler (menu_bar_icon.mm) - it's the
+        // only thing that ever posts this event type.
+        if (ev.type == kTrayRestoreEventType) {
+            exitAppTray();
+        }
+#else
         if (ev.type == SDL_WINDOWEVENT && (ev.window.event == SDL_WINDOWEVENT_MINIMIZED ||
                                             ev.window.event == SDL_WINDOWEVENT_RESTORED ||
                                             ev.window.event == SDL_WINDOWEVENT_FOCUS_GAINED)) {
+            // TODO: "when the main window is minimized or maximized all
+            // the windows should minimize or maximize". Symmetric across
+            // all four windows, not just Main: each is a genuinely
+            // separate top-level window, so on macOS each gets its own
+            // Dock icon once minimized, and restoring *any one* of those
+            // icons must bring the rest back too.
+            //
+            // Two real-machine-only bugs already found and fixed here:
+            // (1) an earlier version only listened on Main, so restoring
+            // via any other window's Dock icon restored just that one.
+            // (2) after fixing that, restoring via a *secondary* window's
+            // Dock icon still didn't cascade - SDL_WINDOWEVENT_RESTORED
+            // was only ever observed to actually arrive for Main; testing
+            // also separately confirmed SDL_MinimizeWindow sets
+            // SDL_WINDOW_HIDDEN alongside SDL_WINDOW_MINIMIZED on this
+            // platform, ruling out that flag as a way to detect "still
+            // minimized" too. So this now also reacts to
+            // SDL_WINDOWEVENT_FOCUS_GAINED - reliably delivered by any
+            // Dock-icon click - gated on our *own* minimized-bool
+            // bookkeeping (mainMinimized/eqMinimized/plMinimized/
+            // infoMinimized, set only by this same code, never read from
+            // an SDL flag) rather than SDL's state, so an ordinary click
+            // on an already-visible window can't misfire this.
+            //
+            // userVisible gates which windows are even eligible - a
+            // window the user closed on purpose stays closed regardless
+            // of what Main or anything else does. Main has no user-hide
+            // concept (only Close, which quits), so it's always eligible.
+            // "Maximize" (the repurposed LitePic triangle - see
+            // toggleMaximize) has its own independent show/hide logic and
+            // isn't part of this cascade.
             // TODO: "when the main window is minimized or maximized all
             // the windows should minimize or maximize". Symmetric across
             // all four windows, not just Main: each is a genuinely
@@ -2597,7 +2753,7 @@ int main(int argc, char** argv) {
                     SDL_RaiseWindow(window);
                 }
             }
-        }
+#endif
 
         if (ev.type == SDL_MOUSEBUTTONDOWN && ev.button.button == SDL_BUTTON_LEFT) {
             // Raises all three windows together, clicked one on top. Without
@@ -2626,7 +2782,11 @@ int main(int argc, char** argv) {
             const int lx = ev.button.x / scale, ly = ev.button.y / scale;
             if (ev.button.windowID == mainWindowID) {
                 if (inRect(lx, ly, kMinimizeX, kMinimizeY, 10, 9)) {
+#ifdef __APPLE__
+                    enterAppTray();
+#else
                     SDL_MinimizeWindow(window);
+#endif
                 } else if (inRect(lx, ly, kCloseX, kCloseY, kCloseSize, kCloseSize)) {
                     running = false;
                 } else if (inRect(lx, ly, kLiteX, kLiteY, 10, 9)) {
