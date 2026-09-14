@@ -5,15 +5,17 @@
 
 // Session persistence: TODO's "save settings on exit (visualizer active,
 // volume, playing, stopped, playlist)", plus XSound (added after the user
-// noticed it wasn't included - same on/off nature as the other toggles).
+// noticed it wasn't included - same on/off nature as the other toggles),
+// plus the exact mid-track position (TODO's "saves the position in the
+// song so you can restart where you left off" - a later, explicit reversal
+// of this comment's own prior note that it was skipped to match the
+// original's default-off "SSTREAMPOS" preference). *Whether* a track
+// auto-resumes playing is still gated on wasPlaying, same as always - only
+// *where* it resumes from changed, via positionSeconds below.
 // Deliberately narrower than the original's xmp.ini
 // (Source/FunzioniGlobali.bas's GestisciPosFrm): no window position,
 // Repeat/Random (not implemented yet), ShowTask, etc - those weren't
-// asked for. Also skips the original's exact mid-track resume position:
-// that feature is gated behind a "SSTREAMPOS" preference that defaults
-// OFF in the original itself, so the faithful default behavior is "if it
-// was playing, start that track over from the beginning on relaunch" -
-// not seek to the exact sample.
+// asked for.
 
 namespace xmad::app {
 
@@ -22,6 +24,8 @@ struct Settings {
     int volumePercent = 25; // 0..100, matches Engine's own fresh-install default
     bool wasPlaying = false;
     int currentIndex = 0;   // index into the resumed playlist
+    double positionSeconds = 0.0; // exact mid-track resume position - only
+                                   // applied when wasPlaying (see main.cpp)
     bool xSound = false;    // Engine::XSound() - mirrors mnuXSound.Checked
     // TODO: "EQ mode not saved". eqPreset mirrors main.cpp's
     // eqCurrentPreset (-1 = none/manual, matching Form_Load never

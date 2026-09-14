@@ -29,6 +29,7 @@ int main() {
         s.volumePercent = 80;
         s.wasPlaying = true;
         s.currentIndex = 2;
+        s.positionSeconds = 123.456;
         s.xSound = true;
         s.eqPreset = 1;
         s.eqBands = {60, 40, 20, 0, -20, -20, 0, 20, 40, 60};
@@ -42,6 +43,7 @@ int main() {
         Check(parsed.volumePercent == 80, "round-trip: volumePercent");
         Check(parsed.wasPlaying == true, "round-trip: wasPlaying");
         Check(parsed.currentIndex == 2, "round-trip: currentIndex");
+        Check(parsed.positionSeconds == 123.456, "round-trip: positionSeconds");
         Check(parsed.xSound == true, "round-trip: xSound");
         Check(parsed.eqPreset == 1, "round-trip: eqPreset");
         Check(parsed.eqBands == s.eqBands, "round-trip: eqBands");
@@ -82,6 +84,7 @@ int main() {
         Check(parsed.specMode == 0, "missing key keeps default (specMode)");
         Check(parsed.volumePercent == 25, "missing key keeps default (volumePercent)");
         Check(parsed.wasPlaying == false, "missing key keeps default (wasPlaying)");
+        Check(parsed.positionSeconds == 0.0, "missing key keeps default (positionSeconds)");
         Check(parsed.xSound == false, "missing key keeps default (xSound)");
         Check(parsed.eqPreset == -1, "missing key keeps default (eqPreset)");
         Check(parsed.eqBands == Settings{}.eqBands, "missing key keeps default (eqBands)");

@@ -2,6 +2,7 @@
 
 #include <cstdlib>
 #include <fstream>
+#include <iomanip>
 #include <sstream>
 #include <sys/stat.h>
 
@@ -13,6 +14,10 @@ std::string SerializeSettings(const Settings& s) {
     out << "VOLUME=" << s.volumePercent << "\n";
     out << "PLAYING=" << (s.wasPlaying ? 1 : 0) << "\n";
     out << "INDEX=" << s.currentIndex << "\n";
+    // Fixed 3 decimal places (millisecond precision), not operator<<'s
+    // default 6-significant-digit precision - the default would silently
+    // lose sub-second precision on any position past ~999s (16.6 minutes).
+    out << "POSITION=" << std::fixed << std::setprecision(3) << s.positionSeconds << "\n";
     out << "XSOUND=" << (s.xSound ? 1 : 0) << "\n";
     out << "EQPRESET=" << s.eqPreset << "\n";
     out << "EQBANDS=";
@@ -40,6 +45,7 @@ bool ParseSettings(const std::string& text, Settings& out) {
             else if (key == "VOLUME") out.volumePercent = std::stoi(value);
             else if (key == "PLAYING") out.wasPlaying = std::stoi(value) != 0;
             else if (key == "INDEX") out.currentIndex = std::stoi(value);
+            else if (key == "POSITION") out.positionSeconds = std::stod(value);
             else if (key == "XSOUND") out.xSound = std::stoi(value) != 0;
             else if (key == "VISPANEL") out.visPanel = std::stoi(value);
             else if (key == "EQPRESET") out.eqPreset = std::stoi(value);

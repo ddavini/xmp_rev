@@ -784,6 +784,7 @@ int main(int argc, char** argv) {
             std::cout << "Resumed session: specMode=" << sessionSettings.specMode
                       << " volume=" << sessionSettings.volumePercent
                       << " wasPlaying=" << sessionSettings.wasPlaying << " index=" << sessionSettings.currentIndex
+                      << " positionSeconds=" << sessionSettings.positionSeconds
                       << " xSound=" << sessionSettings.xSound << " eqPreset=" << sessionSettings.eqPreset
                       << " visPanel=" << sessionSettings.visPanel << " playlistSize=" << playlist.size() << "\n";
         }
@@ -799,12 +800,20 @@ int main(int argc, char** argv) {
         if (resumeSession) {
             const int idx = std::clamp(sessionSettings.currentIndex, 0, static_cast<int>(playlist.size()) - 1);
             playlist.SetCurrentIndex(idx);
-            // Mirrors the original's default behavior (GestisciPosFrm's
-            // LASTMP3/POS resume is gated behind a "SSTREAMPOS" preference
-            // that defaults off): a track that was playing restarts from
-            // the beginning on relaunch, rather than seeking to the exact
-            // sample it was at.
-            if (sessionSettings.wasPlaying) engine.Open(playlist.at(static_cast<size_t>(idx)));
+            // Whether a track auto-resumes playing on relaunch is still
+            // gated on wasPlaying (mirrors the original's GestisciPosFrm
+            // LASTMP3 resume) - only *where* it resumes from changed: it
+            // used to always restart from 0 (matching the original's
+            // default-off "SSTREAMPOS" preference), now it seeks to the
+            // exact position it was at. No clamping needed here -
+            // SeekSeconds already clamps its lower bound, and a stale
+            // saved position past a (possibly since-edited) track's actual
+            // end degrades gracefully through the normal end-of-track
+            // handling.
+            if (sessionSettings.wasPlaying) {
+                engine.Open(playlist.at(static_cast<size_t>(idx)));
+                engine.SeekSeconds(sessionSettings.positionSeconds);
+            }
         } else {
             playlist.SetCurrentIndex(0);
             if (!engine.Open(playlist.at(0))) {
@@ -3246,6 +3255,7 @@ int main(int argc, char** argv) {
         toSave.volumePercent = static_cast<int>(std::lround(engine.Volume() * 100.0f));
         toSave.wasPlaying = engine.state() == audio::PlayState::Playing;
         toSave.currentIndex = std::max(0, playlist.currentIndex());
+        toSave.positionSeconds = engine.positionSeconds();
         toSave.xSound = engine.XSound();
         toSave.eqPreset = eqCurrentPreset;
         toSave.visPanel = static_cast<int>(visPanel);
