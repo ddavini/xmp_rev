@@ -1013,6 +1013,7 @@ int main(int argc, char** argv) {
     };
     int pressedUtility = -1;
     bool volDragging = false; // true while the volume slider thumb is being dragged
+    bool seekDragging = false; // true while the seek bar thumb is being dragged
 
     // Mirrors modVisualMusic.bas's GlobalSpectrumeMode cycling on the
     // SpecMode button - all six of the original's sub-modes, in the same
@@ -1093,6 +1094,19 @@ int main(int argc, char** argv) {
         const float frac = static_cast<float>(clamped - top) / static_cast<float>(bottom - top); // 0=top,1=bottom
         engine.SetVolume(1.0f - frac); // top = max volume, matching xmsVol.xValue's inverted sense
         engine.SetMuted(false);
+    };
+
+    // Click-to-jump + drag-follow on the seek bar (lnPosizione/PicPosizione),
+    // same shape as handleVolSliderClickAt above. No-op with nothing loaded
+    // to seek. Uses the exact same travel math the render code already uses
+    // for the thumb's x position (see the "seek track" block in drawFrame
+    // below) so clicking where the thumb visually sits lands on the
+    // position it visually represents.
+    auto handleSeekBarClickAt = [&](int lx) {
+        if (engine.channels() == 0 || engine.durationSeconds() <= 0.0) return;
+        const int seekTravel = (kSeekX1 - kSeekX0) - 8;
+        const float frac = std::clamp(static_cast<float>(lx - kSeekX0) / static_cast<float>(seekTravel), 0.0f, 1.0f);
+        engine.SeekSeconds(frac * engine.durationSeconds());
     };
 
     // Opens playlist[idx] and starts it playing, keeping playlist's
@@ -2846,6 +2860,11 @@ int main(int argc, char** argv) {
                         }
                         hit = true;
                     }
+                    if (!hit && lx >= kSeekX0 && lx < kSeekX1 && ly >= kSeekY - 4 && ly < kSeekY + 4) {
+                        seekDragging = true;
+                        handleSeekBarClickAt(lx);
+                        hit = true;
+                    }
                     if (!hit && ly < kDragStripH) beginDrag(mainDrag);
                 }
             } else if (ev.button.windowID == plWindowID) {
@@ -2888,6 +2907,7 @@ int main(int argc, char** argv) {
             eqPressedSlider = -1;
             eqPressedPreset = -1;
             volDragging = false;
+            seekDragging = false;
             mainDrag.active = plDrag.active = eqDrag.active = infoDrag.active = aboutDrag.active = false;
         } else if (ev.type == SDL_MOUSEMOTION) {
             updateDrag(mainDrag);
@@ -2897,6 +2917,9 @@ int main(int argc, char** argv) {
             updateDrag(aboutDrag);
             if (volDragging && ev.motion.windowID == mainWindowID) {
                 handleVolSliderClickAt(ev.motion.y / scale);
+            }
+            if (seekDragging && ev.motion.windowID == mainWindowID) {
+                handleSeekBarClickAt(ev.motion.x / scale);
             }
             if (ev.motion.windowID == mainWindowID) {
                 mainMouseX = ev.motion.x / scale;
@@ -3034,7 +3057,8 @@ int main(int argc, char** argv) {
                   << " eqHidden=" << static_cast<bool>(SDL_GetWindowFlags(eqWindow) & SDL_WINDOW_HIDDEN)
                   << " aboutHidden=" << static_cast<bool>(SDL_GetWindowFlags(aboutWindow) & SDL_WINDOW_HIDDEN)
                   << " visPanel=" << static_cast<int>(visPanel) << " visMode=" << static_cast<int>(visMode)
-                  << " plPos=(" << px << "," << py << ") eqPos=(" << ex << "," << ey << ")\n";
+                  << " plPos=(" << px << "," << py << ") eqPos=(" << ex << "," << ey << ")"
+                  << " positionSeconds=" << engine.positionSeconds() << "\n";
     }
 
     if (hoverX >= 0 && hoverY >= 0) {
@@ -3208,7 +3232,8 @@ int main(int argc, char** argv) {
     }
     if (autoAdvanceDeadline != 0) {
         std::cout << "auto-advance-test: end index=" << playlist.currentIndex()
-                   << " state=" << static_cast<int>(engine.state()) << "\n";
+                   << " state=" << static_cast<int>(engine.state())
+                   << " positionSeconds=" << engine.positionSeconds() << "\n";
     }
 
     // Session persistence, save half: mirrors the load gate near playlist
