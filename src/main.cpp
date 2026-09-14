@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -1919,9 +1920,17 @@ int main(int argc, char** argv) {
             static const char* kEjectMenuItems[2] = {"ADD FILES", "ADD FOLDER"};
             for (int i = 0; i < 2; ++i) {
                 const int iy = kEjectMenuY + i * kEjectMenuItemH;
+                // DrawText auto-centers within the field width it's given
+                // (PaintChar's "(ScaleWidth - Dimension*Len)/2" formula) -
+                // passing each label its own exact width (rather than a
+                // shared fixed field) makes that offset 0 for both, so
+                // "ADD FILES" (9 chars) and "ADD FOLDER" (10 chars) start
+                // flush left at the same x instead of the shorter one
+                // drifting right of the longer one.
+                const int fieldWidth = static_cast<int>(std::strlen(kEjectMenuItems[i])) * gfx::BitmapFont::kCellW;
                 DrawTextureAt(renderer,
                               ejectMenuTextCache[static_cast<size_t>(i)].Get(renderer, font, kEjectMenuItems[i],
-                                                                              10 * gfx::BitmapFont::kCellW),
+                                                                              fieldWidth),
                               kEjectMenuX + 2, iy + (kEjectMenuItemH - gfx::BitmapFont::kCellH) / 2);
             }
             SDL_SetRenderDrawColor(renderer, 0x23, 0x26, 0x20, 255);

@@ -42,8 +42,12 @@ std::vector<std::string> OpenNativeFileDialogFiles() {
     // directly or adding an Objective-C++ translation unit to the build.
     const char* cmd =
         "osascript -e 'try' "
+        "-e 'tell application \"System Events\"' "
+        "-e 'activate' "
+        "-e 'delay 0.15' "
         "-e 'set theFiles to choose file with prompt \"Add to Playlist\" "
         "of type {\"mp3\",\"flac\",\"m3u\"} with multiple selections allowed' "
+        "-e 'end tell' "
         "-e 'set out to \"\"' "
         "-e 'repeat with f in theFiles' "
         "-e 'set out to out & (POSIX path of f) & linefeed' "
@@ -75,7 +79,11 @@ std::vector<std::string> OpenNativeFileDialogFolder() {
     // OpenNativeFileDialogFiles as one dialog).
     const char* cmd =
         "osascript -e 'try' "
+        "-e 'tell application \"System Events\"' "
+        "-e 'activate' "
+        "-e 'delay 0.15' "
         "-e 'set theFolders to choose folder with prompt \"Add to Playlist\" with multiple selections allowed' "
+        "-e 'end tell' "
         "-e 'set out to \"\"' "
         "-e 'repeat with f in theFolders' "
         "-e 'set out to out & (POSIX path of f) & linefeed' "
@@ -102,9 +110,13 @@ std::optional<std::string> SaveNativeFileDialog(const std::string& defaultName) 
     // Same osascript-without-linking-AppKit approach as OpenNativeFileDialog.
     const std::string cmd =
         "osascript -e 'try' "
+        "-e 'tell application \"System Events\"' "
+        "-e 'activate' "
+        "-e 'delay 0.15' "
         "-e 'set theFile to choose file name with prompt \"Save Playlist\" default name \"" +
         defaultName +
         "\"' "
+        "-e 'end tell' "
         "-e 'return POSIX path of theFile' "
         "-e 'on error' "
         "-e 'return \"\"' "

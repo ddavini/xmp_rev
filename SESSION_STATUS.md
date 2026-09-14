@@ -807,6 +807,27 @@ display's usable bounds.
     5x6px glyphs and extend the renderer to support mixed case just for
     this one label - user chose to keep "KHZ". No code change; documented
     here so this isn't re-litigated as a bug later.
+- **Fixed: native file dialogs (Eject's "Add to Playlist" open dialog,
+  the folder-picker, and Playlist's Save dialog) could pop up out of
+  focus** - `osascript -e 'choose file/folder/file name ...'` without an
+  owning application context sometimes surfaces the panel behind the
+  app's own SDL windows instead of in front, since nothing tells macOS
+  which process should be made key when the panel appears. Fixed in
+  `src/app/file_dialog.cpp`'s three `osascript` command strings
+  (`OpenNativeFileDialogFiles`, `OpenNativeFileDialogFolder`,
+  `SaveNativeFileDialog`) by wrapping the existing `choose ...` line in
+  `tell application "System Events" / activate / delay 0.15 / ... /
+  end tell` - `activate`ing System Events before the panel is created
+  forces it frontmost, and the short delay gives the activation time to
+  land before the panel draws (no delay was sometimes not enough for the
+  panel to actually come forward, per hands-on testing). Pure string
+  changes to the shelled-out command only - `app::ParseDialogOutput`
+  (the tested, pure-parsing half of this file) is untouched, so
+  `file_dialog_test`'s 8 checks stay valid as-is. Bumped `kVersion` to
+  "1.0.33" (`include/app/version.h`) alongside it. Not yet re-verified
+  live on the user's real machine (only via the `try`/`on error` path,
+  same limitation noted in "Verification limits" below - a real
+  interactive dialog pop-up can't be watched for focus in this sandbox).
 
 ## Real crash, found via a user-submitted macOS crash report and fixed
 
