@@ -2523,7 +2523,7 @@ int main(int argc, char** argv) {
     // original's "VBR" flag came from parsing MPEG frame headers, which
     // dr_mp3 doesn't expose), not read from a header field.
     CachedTextTexture infoTitleTextCache;
-    std::array<CachedTextTexture, 8> infoLineTextCache; // >= max lines drawInfoFrame ever produces
+    std::array<CachedTextTexture, 12> infoLineTextCache; // >= max lines drawInfoFrame ever produces
 
     auto drawInfoFrame = [&]() {
         SDL_SetRenderDrawColor(infoRenderer, 0x10, 0x12, 0x09, 255);
@@ -2543,6 +2543,18 @@ int main(int argc, char** argv) {
             const std::string& path = playlist.at(static_cast<size_t>(playlist.currentIndex()));
             const bool isFlac = lowerExt(path) == "flac";
             lines.push_back("File: " + BaseName(path));
+            // TODO: "reports ID3 values if present" - one line per field
+            // actually populated (audio::ReadTrackTags), not a fixed slot
+            // per field - a track with no tags at all just skips straight
+            // to Format: below, same as before this feature existed.
+            {
+                const audio::TagInfo tags = audio::ReadTrackTags(path);
+                if (!tags.title.empty()) lines.push_back("Title: " + tags.title);
+                if (!tags.artist.empty()) lines.push_back("Artist: " + tags.artist);
+                if (!tags.album.empty()) lines.push_back("Album: " + tags.album);
+                if (!tags.genre.empty()) lines.push_back("Genre: " + tags.genre);
+                if (!tags.track.empty()) lines.push_back("Track: " + tags.track);
+            }
             lines.push_back(std::string("Format: ") + (isFlac ? "FLAC" : "MP3"));
             lines.push_back(std::string("Mode: ") + (engine.channels() == 1 ? "Mono" : "Stereo"));
             lines.push_back("Frequency: " + std::to_string(engine.sampleRate()) + " Hz");

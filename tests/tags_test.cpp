@@ -9,8 +9,11 @@
 #include <cstring>
 #include <string>
 
+using xmad::audio::ParseId3v1Tags;
 using xmad::audio::ParseId3v1Title;
+using xmad::audio::ParseId3v2Tags;
 using xmad::audio::ParseId3v2Title;
+using xmad::audio::TagInfo;
 
 namespace {
 int g_failures = 0;
@@ -52,6 +55,30 @@ std::string BuildId3v23(const std::string& frameBody) {
     tag += frame;
     return tag;
 }
+
+// Builds one ID3v2.3 frame: 4-char id, plain-32 size, 2 flag bytes, body.
+std::string BuildFrame(const std::string& id, const std::string& body) {
+    std::string frame = id;
+    AppendPlain32(frame, static_cast<uint32_t>(body.size()));
+    frame += std::string(2, '\0'); // flags
+    frame += body;
+    return frame;
+}
+
+// Wraps one or more already-built frames (BuildFrame) in an ID3v2.3 tag
+// header.
+std::string BuildId3v23Tag(const std::string& frames) {
+    std::string tag = "ID3";
+    tag += static_cast<char>(3); // version major
+    tag += static_cast<char>(0); // version minor
+    tag += static_cast<char>(0); // flags
+    AppendSyncSafe32(tag, static_cast<uint32_t>(frames.size()));
+    tag += frames;
+    return tag;
+}
+
+// Latin1 (encoding 0) text frame body.
+std::string Latin1Body(const std::string& text) { return std::string(1, static_cast<char>(0)) + text; }
 
 std::string Utf16LE(const std::string& ascii) {
     std::string out;
@@ -145,6 +172,78 @@ int main() {
     {
         std::string tail(128, 'x');
         Check(ParseId3v1Title(tail).empty(), "id3v1 missing TAG magic yields empty");
+    }
+
+    // ParseId3v2Tags: a tag with TIT2/TPE1/TALB/TCON/TRCK all present
+    // extracts every field in one pass, including TRCK's "track/total"
+    // format displaying just the track.
+    {
+        std::string frames = BuildFrame("TIT2", Latin1Body("Show Me Love"));
+        frames += BuildFrame("TPE1", Latin1Body("Robin S"));
+        frames += BuildFrame("TALB", Latin1Body("Show Me Love"));
+        frames += BuildFrame("TCON", Latin1Body("House"));
+        frames += BuildFrame("TRCK", Latin1Body("5/12"));
+        const std::string tag = BuildId3v23Tag(frames);
+
+        TagInfo t;
+        ParseId3v2Tags(tag, t);
+        Check(t.title == "Show Me Love", "id3v2 multi-field: title");
+        Check(t.artist == "Robin S", "id3v2 multi-field: artist");
+        Check(t.album == "Show Me Love", "id3v2 multi-field: album");
+        Check(t.genre == "House", "id3v2 multi-field: genre");
+        Check(t.track == "5", "id3v2 multi-field: track (total stripped)");
+    }
+
+    // ParseId3v2Tags: only some fields present - the rest stay empty
+    // rather than getting clobbered with garbage.
+    {
+        const std::string tag = BuildId3v23Tag(BuildFrame("TPE1", Latin1Body("Some Artist")));
+        TagInfo t;
+        ParseId3v2Tags(tag, t);
+        Check(t.artist == "Some Artist", "id3v2 partial: artist present");
+        Check(t.title.empty(), "id3v2 partial: title absent stays empty");
+        Check(t.album.empty(), "id3v2 partial: album absent stays empty");
+    }
+
+    // ParseId3v1Tags: title/artist/album at their fixed offsets, plain
+    // ID3v1 (not the v1.1 track convention) - no track extracted.
+    {
+        std::string tail = "TAG";
+        std::string title = "Finally";
+        title.resize(30, ' ');
+        std::string artist = "CeCe Peniston";
+        artist.resize(30, ' ');
+        std::string album = "Finally";
+        album.resize(30, ' ');
+        tail += title;
+        tail += artist;
+        tail += album;
+        tail.resize(128, '\0'); // year/comment/genre left zeroed
+
+        TagInfo t;
+        ParseId3v1Tags(tail, t);
+        Check(t.title == "Finally", "id3v1 multi-field: title");
+        Check(t.artist == "CeCe Peniston", "id3v1 multi-field: artist");
+        Check(t.album == "Finally", "id3v1 multi-field: album");
+        Check(t.track.empty(), "id3v1 multi-field: no v1.1 track marker means no track");
+        Check(t.genre.empty(), "id3v1 multi-field: genre never decoded (numeric-only)");
+    }
+
+    // ParseId3v1Tags: ID3v1.1's track-number convention (comment field's
+    // next-to-last byte 0, last byte the track number).
+    {
+        std::string tail = "TAG";
+        tail += std::string(90, ' ');       // title/artist/album (30 each), unused here
+        tail += std::string(4, '\0');       // year
+        tail += std::string(28, ' ');       // comment (first 28 of the 30-byte field)
+        tail += static_cast<char>(0);       // v1.1 marker
+        tail += static_cast<char>(7);       // track number
+        tail += static_cast<char>(17);      // genre (still not decoded)
+        Check(tail.size() == 128, "test fixture: id3v1.1 tail is 128 bytes");
+
+        TagInfo t;
+        ParseId3v1Tags(tail, t);
+        Check(t.track == "7", "id3v1.1: track number extracted");
     }
 
     if (g_failures == 0) {

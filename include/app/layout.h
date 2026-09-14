@@ -197,14 +197,17 @@ constexpr int kEqPerSongW = kEqWindowW - kEqPerSongX - 6, kEqPerSongH = kEqPrese
 
 // Info window (new - not in the original as a fourth always-visible window;
 // frmInfo.frm was a modal popup, toggled here instead like EQ/Playlist).
-// The original's frmInfo shows MPEG-frame-header and ID3 detail (VBR,
-// Emphasis, CRC, Track, Padding, Artist, Album, Genre, Comment, ...) that
-// isn't available here: dr_mp3/dr_flac decode audio but don't parse ID3
-// tags or raw MPEG frame headers (same gap already flagged for ID3 tag
-// editing). Shown instead is only what's genuinely read from the open
-// decoder - File/Format/Mode/Frequency/average Bit Rate/Duration/Decoder.
+// The original's frmInfo also shows raw MPEG-frame-header detail (VBR,
+// Emphasis, CRC, Padding) that still isn't available here - dr_mp3
+// decodes audio but doesn't expose the frame header - but TODO's "reports
+// ID3 values if present" (Title/Artist/Album/Genre/Track) is now covered
+// via audio::ReadTrackTags, alongside what's genuinely read from the open
+// decoder (File/Format/Mode/Frequency/average Bit Rate/Duration/Decoder).
+// Height grown from 100 (7 fixed lines) to fit up to 5 more ID3 lines,
+// shown only when actually present - a track with no tags at all still
+// just shows the original 7.
 constexpr int kInfoWindowW = kWindowW;
-constexpr int kInfoWindowH = 100;
+constexpr int kInfoWindowH = 150;
 constexpr int kInfoTextX = 8, kInfoTextY0 = 26, kInfoLineH = 10;
 
 // About window (TODO: "create about page linked to the japanese character
