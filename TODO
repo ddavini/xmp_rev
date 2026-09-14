@@ -1,0 +1,3 @@
+- Add a setting for UI scale / text+button size (default stays as-is; a tester found it too small)
+- decide license
+- open all the .mp3s or .flacs is a directory if a directory is selected
