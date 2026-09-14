@@ -815,7 +815,8 @@ int main(int argc, char** argv) {
         if (app::LoadSettingsFile(app::SettingsFilePath(), sessionSettings)) {
             std::cout << "Resumed session: specMode=" << sessionSettings.specMode
                       << " volume=" << sessionSettings.volumePercent
-                      << " wasPlaying=" << sessionSettings.wasPlaying << " index=" << sessionSettings.currentIndex
+                      << " wasPlaying=" << sessionSettings.wasPlaying
+                      << " wasPaused=" << sessionSettings.wasPaused << " index=" << sessionSettings.currentIndex
                       << " positionSeconds=" << sessionSettings.positionSeconds
                       << " xSound=" << sessionSettings.xSound << " eqPreset=" << sessionSettings.eqPreset
                       << " visPanel=" << sessionSettings.visPanel << " playlistSize=" << playlist.size() << "\n";
@@ -832,19 +833,27 @@ int main(int argc, char** argv) {
         if (resumeSession) {
             const int idx = std::clamp(sessionSettings.currentIndex, 0, static_cast<int>(playlist.size()) - 1);
             playlist.SetCurrentIndex(idx);
-            // Whether a track auto-resumes playing on relaunch is still
-            // gated on wasPlaying (mirrors the original's GestisciPosFrm
-            // LASTMP3 resume) - only *where* it resumes from changed: it
-            // used to always restart from 0 (matching the original's
-            // default-off "SSTREAMPOS" preference), now it seeks to the
-            // exact position it was at. No clamping needed here -
-            // SeekSeconds already clamps its lower bound, and a stale
-            // saved position past a (possibly since-edited) track's actual
-            // end degrades gracefully through the normal end-of-track
-            // handling.
-            if (sessionSettings.wasPlaying) {
+            // Whether a track auto-resumes *playing* on relaunch is gated
+            // on wasPlaying alone (mirrors the original's GestisciPosFrm
+            // LASTMP3 resume) - but whether it reopens/seeks *at all* is
+            // gated on wasPlaying-or-wasPaused. A plain Stop (the original's
+            // "don't resume" case) still doesn't reopen anything; a Pause
+            // used to fall into that same "don't reopen" bucket too, which
+            // is the bug the user reported ("pause then close loses the
+            // position, and Pause on relaunch does nothing since nothing's
+            // loaded to resume") - Paused means "come back to this", not
+            // "done with this", so it now reopens and seeks like Playing
+            // does, just without auto-starting playback. No clamping needed
+            // here - SeekSeconds already clamps its lower bound, and a
+            // stale saved position past a (possibly since-edited) track's
+            // actual end degrades gracefully through the normal
+            // end-of-track handling.
+            if (sessionSettings.wasPlaying || sessionSettings.wasPaused) {
                 engine.Open(playlist.at(static_cast<size_t>(idx)));
                 engine.SeekSeconds(sessionSettings.positionSeconds);
+                // Open() always starts playback - undo that immediately if
+                // the saved state was Paused, not Playing.
+                if (!sessionSettings.wasPlaying) engine.Pause();
             }
         } else {
             playlist.SetCurrentIndex(0);
@@ -3734,6 +3743,7 @@ int main(int argc, char** argv) {
         toSave.specMode = static_cast<int>(visMode);
         toSave.volumePercent = static_cast<int>(std::lround(engine.Volume() * 100.0f));
         toSave.wasPlaying = engine.state() == audio::PlayState::Playing;
+        toSave.wasPaused = engine.state() == audio::PlayState::Paused;
         toSave.currentIndex = std::max(0, playlist.currentIndex());
         toSave.positionSeconds = engine.positionSeconds();
         toSave.xSound = engine.XSound();

@@ -13,6 +13,7 @@ std::string SerializeSettings(const Settings& s) {
     out << "SPECMODE=" << s.specMode << "\n";
     out << "VOLUME=" << s.volumePercent << "\n";
     out << "PLAYING=" << (s.wasPlaying ? 1 : 0) << "\n";
+    out << "PAUSED=" << (s.wasPaused ? 1 : 0) << "\n";
     out << "INDEX=" << s.currentIndex << "\n";
     // Fixed 3 decimal places (millisecond precision), not operator<<'s
     // default 6-significant-digit precision - the default would silently
@@ -45,6 +46,7 @@ bool ParseSettings(const std::string& text, Settings& out) {
             if (key == "SPECMODE") out.specMode = std::stoi(value);
             else if (key == "VOLUME") out.volumePercent = std::stoi(value);
             else if (key == "PLAYING") out.wasPlaying = std::stoi(value) != 0;
+            else if (key == "PAUSED") out.wasPaused = std::stoi(value) != 0;
             else if (key == "INDEX") out.currentIndex = std::stoi(value);
             else if (key == "POSITION") out.positionSeconds = std::stod(value);
             else if (key == "XSOUND") out.xSound = std::stoi(value) != 0;

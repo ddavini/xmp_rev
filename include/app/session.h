@@ -24,9 +24,16 @@ struct Settings {
     int specMode = 0;       // VisMode enum value (see main.cpp), 0..5
     int volumePercent = 25; // 0..100, matches Engine's own fresh-install default
     bool wasPlaying = false;
+    // Fixes "pause then quit loses the position": wasPlaying alone can't
+    // tell a deliberate Stop (original: don't resume) apart from a Pause
+    // (user meant to come back to this). Track/position now reopen on
+    // either wasPlaying or wasPaused; wasPlaying alone still decides
+    // whether playback actually resumes (see main.cpp's resume block).
+    bool wasPaused = false;
     int currentIndex = 0;   // index into the resumed playlist
     double positionSeconds = 0.0; // exact mid-track resume position - only
-                                   // applied when wasPlaying (see main.cpp)
+                                   // applied when wasPlaying or wasPaused
+                                   // (see main.cpp)
     bool xSound = false;    // Engine::XSound() - mirrors mnuXSound.Checked
     // TODO: "EQ mode not saved". eqPreset mirrors main.cpp's
     // eqCurrentPreset (-1 = none/manual, matching Form_Load never

@@ -824,10 +824,66 @@ display's usable bounds.
   changes to the shelled-out command only - `app::ParseDialogOutput`
   (the tested, pure-parsing half of this file) is untouched, so
   `file_dialog_test`'s 8 checks stay valid as-is. Bumped `kVersion` to
-  "1.0.33" (`include/app/version.h`) alongside it. Not yet re-verified
-  live on the user's real machine (only via the `try`/`on error` path,
-  same limitation noted in "Verification limits" below - a real
-  interactive dialog pop-up can't be watched for focus in this sandbox).
+  "1.0.33" (`include/app/version.h`) alongside it. **Confirmed on the
+  user's real machine.**
+- **Fixed, same session: Eject menu's "ADD FILES"/"ADD FOLDER" labels
+  rendered at different x positions** - not a string-padding issue (a
+  leading space was tried and explicitly rejected by the user - both
+  should start at the *same* point, not be offset from each other).
+  Root cause: `BitmapFont::DrawText` auto-centers text within whatever
+  field width it's given (`(fieldWidth - cellPitch*len)/2`, mirroring
+  `PaintChar`'s original centering formula - correct for the EQ preset
+  buttons and other centered labels that already rely on it), but the
+  Eject menu's render loop (`src/main.cpp`, `ejectMenuOpen` block) passed
+  both labels the *same* fixed 10-char field width despite "ADD FILES"
+  being 9 chars and "ADD FOLDER" being 10 - so the shorter label's
+  centering offset landed 2px right of the longer one's. Fixed by giving
+  each label its own exact-width field (`strlen(item) * kCellW`) instead
+  of a shared constant, making the centering offset 0 for both. Verified
+  via `--dump-frame` pixel crops (both "A"s now start at the identical
+  x) and confirmed by the user on their real machine, who caught that an
+  earlier `--dump-frame`-only check had missed a stale `.app` bundle
+  (`make build/xmad` alone doesn't refresh `build/xmad.app`'s embedded
+  copy - needs `make app` too) still running the pre-fix binary.
+- **Fixed: pausing then closing the app lost the resume position, and
+  Pause did nothing on the next launch** (user report: "if I pause and
+  close the app, it doesn't remember the position... clicking pause
+  doesn't resume"). Root cause: the resume gate in `main.cpp` used
+  `sessionSettings.wasPlaying` alone to decide *both* whether to
+  auto-resume playback *and* whether to reopen the track/seek to the
+  saved position at all - `wasPlaying` is only true if the engine was
+  `PlayState::Playing` at exit, so a `Paused` exit (like a genuinely
+  `Stopped` one) skipped reopening entirely. The saved position
+  (`positionSeconds`, already computed correctly at save time regardless
+  of state) was written to disk every time, but on the next launch
+  nothing was ever loaded to apply it to - so the track wasn't there,
+  and pressing Pause was correctly a no-op on a channel count of 0 (not
+  a separate bug in the toggle itself, which was already correct).
+  Fixed by adding a new `Settings::wasPaused` field (`PAUSED=` key in
+  `session.cpp`, same tolerant-parsing convention as every other key)
+  that's true iff `engine.state() == PlayState::Paused` at exit. The
+  resume block now reopens/seeks on `wasPlaying || wasPaused` -
+  `wasPlaying` alone still gates whether playback actually auto-starts,
+  via a `engine.Pause()` right after `Open()` (which always starts
+  playback) when the saved state was Paused, not Playing. A genuine
+  Stop still doesn't reopen anything - `wasPaused` and `wasPlaying` are
+  both false in that case, unchanged from before, matching the
+  already-verified "stopped stays stopped" case from the session-
+  persistence feature above. `tests/session_test.cpp` gained a
+  dedicated `wasPaused`-true/`wasPlaying`-false round-trip case plus a
+  missing-key-default check. Verified for real, not just unit-tested:
+  ran the actual binary against an isolated `HOME` three ways - (1)
+  `--click pause` immediately after opening a track, real exit, confirmed
+  `settings.cfg` came out `PLAYING=0`/`PAUSED=1`, then a second zero-arg
+  launch printed `wasPaused=1` and `state=2` (Paused) at the end of a
+  real `--auto-advance-test` run - proving it reopened and stayed
+  paused rather than either staying empty or auto-playing; (2) hand-
+  written a `settings.cfg` with `PAUSED=1`/`POSITION=2.500` to confirm
+  the resumed engine's real position is genuinely the saved 2.5s, not
+  just 0; (3) a real `--click stop` exit still leaves `PAUSED=0` and a
+  second launch stays `state=0` (Stopped, nothing reopened) - confirming
+  the Stop case is untouched by this fix. Full 12-test suite green,
+  clean rebuild and `.app` bundle both confirmed.
 
 ## Real crash, found via a user-submitted macOS crash report and fixed
 

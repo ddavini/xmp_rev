@@ -48,6 +48,7 @@ int main() {
         Check(parsed.specMode == 4, "round-trip: specMode");
         Check(parsed.volumePercent == 80, "round-trip: volumePercent");
         Check(parsed.wasPlaying == true, "round-trip: wasPlaying");
+        Check(parsed.wasPaused == false, "round-trip: wasPaused");
         Check(parsed.currentIndex == 2, "round-trip: currentIndex");
         Check(parsed.positionSeconds == 123.456, "round-trip: positionSeconds");
         Check(parsed.xSound == true, "round-trip: xSound");
@@ -55,6 +56,23 @@ int main() {
         Check(parsed.eqBands == s.eqBands, "round-trip: eqBands");
         Check(parsed.visPanel == 2, "round-trip: visPanel");
         Check(parsed.perSongEq == true, "round-trip: perSongEq");
+    }
+
+    // wasPaused round-trips independently of wasPlaying - the fix for
+    // "pause then quit loses the position" depends on these two being
+    // distinguishable rather than collapsed into one bool.
+    {
+        Settings s;
+        s.wasPlaying = false;
+        s.wasPaused = true;
+        s.positionSeconds = 42.5;
+        const std::string text = SerializeSettings(s);
+
+        Settings parsed;
+        Check(ParseSettings(text, parsed), "wasPaused round-trip: parse succeeds");
+        Check(parsed.wasPlaying == false, "wasPaused round-trip: wasPlaying stays false");
+        Check(parsed.wasPaused == true, "wasPaused round-trip: wasPaused");
+        Check(parsed.positionSeconds == 42.5, "wasPaused round-trip: positionSeconds");
     }
 
     // Empty input: no settings file yet (first run) - fails cleanly, caller
@@ -91,6 +109,7 @@ int main() {
         Check(parsed.specMode == 0, "missing key keeps default (specMode)");
         Check(parsed.volumePercent == 25, "missing key keeps default (volumePercent)");
         Check(parsed.wasPlaying == false, "missing key keeps default (wasPlaying)");
+        Check(parsed.wasPaused == false, "missing key keeps default (wasPaused)");
         Check(parsed.positionSeconds == 0.0, "missing key keeps default (positionSeconds)");
         Check(parsed.xSound == false, "missing key keeps default (xSound)");
         Check(parsed.eqPreset == -1, "missing key keeps default (eqPreset)");
