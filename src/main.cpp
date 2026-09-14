@@ -904,7 +904,7 @@ int main(int argc, char** argv) {
     // now). One persistent instance reused every frame - constructing it
     // allocates internal buffers sized to the FFT window.
     constexpr int kFftPoints = audio::Engine::kVisSnapshotFrames; // 1024
-    constexpr int kNumBars = 27; // matches the analyzer's ~89px width at 3px/bar
+    constexpr int kNumBars = 29; // matches the analyzer's ~89px width at 3px/bar
     dsp::SpectrumAnalyzer spectrumAnalyzer(kFftPoints, dsp::Window::Hanning);
     std::array<float, kNumBars> barLevels{}; // raw target level this frame, 0..1
     float peakL = 0.0f, peakR = 0.0f;
@@ -1545,25 +1545,25 @@ int main(int argc, char** argv) {
                 // a small gap between the bars with those though" for
                 // just those three, then "the bars are of different
                 // size, make them all the same size ... okay to leave
-                // some black pixels at the left" - the previous evenly-
-                // distributed segment widths varied by 1px (e.g. 3 or 4)
-                // depending on rounding, which is what read as
-                // inconsistent. Every bar is now a fixed kBarSegW px wide
-                // (floor(kAnalyzerW/kNumBars) - kAnalyzerW isn't evenly
-                // divisible by kNumBars, so this always leaves a
-                // remainder), and the whole row is right-aligned within
-                // the analyzer box - `kBarRowX0` starts however many
-                // pixels in are needed to push that leftover to the left
-                // edge as unused/black space, per the user's explicit
-                // instruction, rather than distributing it invisibly
-                // across the bars as slightly-different widths. FadeFft
+                // some black pixels" - the previous evenly-distributed
+                // segment widths varied by 1px (e.g. 3 or 4) depending on
+                // rounding, which is what read as inconsistent. Every bar
+                // is now a fixed kBarSegW px wide (floor(kAnalyzerW/
+                // kNumBars) - kAnalyzerW isn't evenly divisible by
+                // kNumBars, so this always leaves a remainder) rather than
+                // distributing it invisibly across the bars as slightly-
+                // different widths. That remainder was originally pushed
+                // to the left edge (row right-aligned within the analyzer
+                // box); a later request flipped it to the right instead
+                // (`kBarRowX0` now just left-aligns at kAnalyzerX, so the
+                // leftover naturally falls after the last bar). FadeFft
                 // stays fully gapless (matches the real `DisgnaxmMP3FFT`
                 // renderer's true per-pixel fill); the other three get a
                 // deliberate 1px gap carved out of each otherwise-fixed-
                 // width bar.
                 constexpr int kBarGapPx = 1;
                 constexpr int kBarSegW = kAnalyzerW / kNumBars;
-                constexpr int kBarRowX0 = kAnalyzerX + (kAnalyzerW - kBarSegW * kNumBars);
+                constexpr int kBarRowX0 = kAnalyzerX;
                 for (int i = 0; i < kNumBars; ++i) {
                     const int bx = kBarRowX0 + i * kBarSegW;
                     const int gap = visMode == VisMode::FadeFft ? 0 : kBarGapPx;
