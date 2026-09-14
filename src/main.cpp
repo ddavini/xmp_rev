@@ -160,6 +160,7 @@ struct EqFrameKey {
     std::array<int, audio::Equalizer::kBands> bands{};
     int pressedSlider = -2;
     int currentPreset = -2;
+    bool perSongEq = false;
     bool operator==(const EqFrameKey&) const = default;
 };
 
@@ -1158,11 +1159,18 @@ int main(int argc, char** argv) {
     // this stays the do-nothing default forever.
     std::function<void(bool)> notifyNowPlayingChanged = [](bool) {};
 
+    // Same deferred-std::function trick, same reason: applies the
+    // just-opened track's per-song EQ bands (perSongEqEnabled/
+    // perSongEqBands aren't declared until the EQ window's state further
+    // down). No-op (default) until that real body is assigned.
+    std::function<void()> applyPerSongEqForCurrentTrack = [] {};
+
     auto openPlaylistIndex = [&](int idx) {
         if (idx < 0 || static_cast<size_t>(idx) >= playlist.size()) return;
         playlist.SetCurrentIndex(idx);
         engine.Open(playlist.at(static_cast<size_t>(idx)));
         notifyNowPlayingChanged(true);
+        applyPerSongEqForCurrentTrack();
     };
 
     // handleTransportPress (Eject, below) needs to add files to the
@@ -2291,15 +2299,55 @@ int main(int argc, char** argv) {
     int eqPressedSlider = -1; // band index whose arrow is held, or -1
     int eqPressedPreset = -1;
 
+    // TODO: "per song equalization setting". Off = today's behavior, one
+    // global set of bands applies to every track. On = each track's own
+    // bands are recalled on open (openPlaylistIndex, above) and any edit
+    // made here is written back into perSongEqBands for whichever track
+    // is currently open (syncPerSongEqIfEnabled, below) - see
+    // session.h's EqPerSongPath()/SerializeEqPerSong for the on-disk
+    // format. A track with no entry yet starts flat (all-zero), not
+    // inherited from whatever was playing before.
+    bool perSongEqEnabled = sessionSettings.perSongEq;
+    std::unordered_map<std::string, std::array<int, audio::Equalizer::kBands>> perSongEqBands;
+    app::LoadEqPerSongFile(app::EqPerSongPath(), perSongEqBands); // no warning if missing - first run has none yet
+
+    applyPerSongEqForCurrentTrack = [&]() {
+        if (!perSongEqEnabled || playlist.empty() || playlist.currentIndex() < 0) return;
+        const auto it = perSongEqBands.find(playlist.at(static_cast<size_t>(playlist.currentIndex())));
+        for (int b = 0; b < audio::Equalizer::kBands; ++b) {
+            engine.SetEqBand(b, it != perSongEqBands.end() ? it->second[static_cast<size_t>(b)] : 0);
+        }
+        eqCurrentPreset = -1;
+    };
+    // Startup auto-open (src/main.cpp's resumeSession/positional-tracks
+    // branches) opens tracks via engine.Open() directly rather than
+    // through openPlaylistIndex, same gap notifyNowPlayingChanged already
+    // had to work around - catches up immediately instead of waiting for
+    // the next real track switch.
+    applyPerSongEqForCurrentTrack();
+
     auto eqTrackInnerY = [&](int* top, int* bottom) {
         *top = kEqSliderTrackY + kEqArrowSize;
         *bottom = kEqSliderTrackY + kEqSliderTrackH - kEqArrowSize;
+    };
+
+    // Writes the engine's current 10 bands into perSongEqBands for
+    // whichever track is open, when per-song mode is on - called after
+    // every user-driven band change (preset pick, slider drag, arrow
+    // click) so the file saved on exit always reflects the last edit,
+    // not just whatever was current at startup.
+    auto syncPerSongEqIfEnabled = [&]() {
+        if (!perSongEqEnabled || playlist.empty() || playlist.currentIndex() < 0) return;
+        std::array<int, audio::Equalizer::kBands> b{};
+        for (int i = 0; i < audio::Equalizer::kBands; ++i) b[i] = engine.EqBand(i);
+        perSongEqBands[playlist.at(static_cast<size_t>(playlist.currentIndex()))] = b;
     };
 
     auto applyEqPreset = [&](int idx) {
         if (idx < 0 || idx >= 5) return;
         for (int b = 0; b < audio::Equalizer::kBands; ++b) engine.SetEqBand(b, kEqPresetValues[idx][b]);
         eqCurrentPreset = idx;
+        syncPerSongEqIfEnabled();
     };
 
     // Click-to-jump rather than a continuous drag (the original's vsGraphic
@@ -2314,6 +2362,7 @@ int main(int argc, char** argv) {
         const int value = static_cast<int>(std::lround((1.0 - 2.0 * frac) * 127.0)); // top=+127
         engine.SetEqBand(band, value);
         eqCurrentPreset = -1; // manual tweak breaks preset match, as in the original
+        syncPerSongEqIfEnabled();
     };
 
     auto handleEqClickAt = [&](int lx, int ly) {
@@ -2325,6 +2374,18 @@ int main(int argc, char** argv) {
                 return;
             }
         }
+        if (lx >= kEqPerSongX && lx < kEqPerSongX + kEqPerSongW && ly >= kEqPerSongY &&
+            ly < kEqPerSongY + kEqPerSongH) {
+            perSongEqEnabled = !perSongEqEnabled;
+            // Felt immediately rather than only on the next track change -
+            // reuses the exact same lookup-or-flat logic openPlaylistIndex
+            // triggers on a real track switch. A no-op when turning off
+            // (the guard inside only ever applies bands when enabled), so
+            // the global bands are simply left as whatever they already
+            // were.
+            applyPerSongEqForCurrentTrack();
+            return;
+        }
         for (int b = 0; b < audio::Equalizer::kBands; ++b) {
             const int sx = kEqSliderX0 + b * kEqSliderPitch;
             if (lx < sx || lx >= sx + kEqSliderW) continue;
@@ -2332,12 +2393,14 @@ int main(int argc, char** argv) {
                 eqPressedSlider = b;
                 engine.SetEqBand(b, std::clamp(engine.EqBand(b) + 13, -127, 127));
                 eqCurrentPreset = -1;
+                syncPerSongEqIfEnabled();
                 return;
             }
             if (ly >= kEqSliderTrackY + kEqSliderTrackH - kEqArrowSize && ly < kEqSliderTrackY + kEqSliderTrackH) {
                 eqPressedSlider = b;
                 engine.SetEqBand(b, std::clamp(engine.EqBand(b) - 13, -127, 127));
                 eqCurrentPreset = -1;
+                syncPerSongEqIfEnabled();
                 return;
             }
             if (ly >= kEqSliderTrackY && ly < kEqSliderTrackY + kEqSliderTrackH) {
@@ -2352,6 +2415,7 @@ int main(int argc, char** argv) {
     std::array<CachedTextTexture, 3> eqLegendTextCache;
     std::array<CachedTextTexture, audio::Equalizer::kBands> eqBandTextCache;
     std::array<CachedTextTexture, 5> eqPresetTextCache;
+    CachedTextTexture eqPerSongTextCache;
 
     auto drawEqFrame = [&]() {
         SDL_SetRenderDrawColor(eqRenderer, 0x10, 0x12, 0x09, 255);
@@ -2430,6 +2494,25 @@ int main(int argc, char** argv) {
                           eqPresetTextCache[static_cast<size_t>(i)].Get(
                               eqRenderer, font, label, static_cast<int>(label.size()) * gfx::BitmapFont::kCellW),
                           textX, kEqPresetY + 6);
+        }
+
+        // Per-song EQ toggle - same active/inactive fill+outline
+        // convention as the preset buttons above and drawToggle on Main.
+        {
+            SDL_SetRenderDrawColor(eqRenderer, perSongEqEnabled ? 0x2a : 0x1a, perSongEqEnabled ? 0x8f : 0x5a,
+                                    perSongEqEnabled ? 0x46 : 0x2a, 255);
+            SDL_Rect bg{kEqPerSongX, kEqPerSongY, kEqPerSongW, kEqPerSongH};
+            SDL_RenderFillRect(eqRenderer, &bg);
+            SDL_SetRenderDrawColor(eqRenderer, perSongEqEnabled ? 0x3d : 0x2a, perSongEqEnabled ? 0xff : 0x7a,
+                                    perSongEqEnabled ? 0x74 : 0x3a, 255);
+            SDL_RenderDrawRect(eqRenderer, &bg);
+
+            const std::string label = "XEQ";
+            const int textX = kEqPerSongX + (kEqPerSongW - static_cast<int>(label.size()) * gfx::BitmapFont::kCellW) / 2;
+            DrawTextureAt(eqRenderer,
+                          eqPerSongTextCache.Get(eqRenderer, font, label,
+                                                  static_cast<int>(label.size()) * gfx::BitmapFont::kCellW),
+                          textX, kEqPerSongY + (kEqPerSongH - gfx::BitmapFont::kCellH) / 2);
         }
     };
 
@@ -3508,6 +3591,7 @@ int main(int argc, char** argv) {
             for (int b = 0; b < audio::Equalizer::kBands; ++b) eqKey.bands[static_cast<size_t>(b)] = engine.EqBand(b);
             eqKey.pressedSlider = eqPressedSlider;
             eqKey.currentPreset = eqCurrentPreset;
+            eqKey.perSongEq = perSongEqEnabled;
             if (!lastEqKey || !(*lastEqKey == eqKey)) {
                 drawEqFrame();
                 SDL_RenderPresent(eqRenderer);
@@ -3563,11 +3647,13 @@ int main(int argc, char** argv) {
         toSave.xSound = engine.XSound();
         toSave.eqPreset = eqCurrentPreset;
         toSave.visPanel = static_cast<int>(visPanel);
+        toSave.perSongEq = perSongEqEnabled;
         for (int b = 0; b < audio::Equalizer::kBands; ++b) {
             toSave.eqBands[static_cast<size_t>(b)] = engine.EqBand(b);
         }
         app::SaveSettingsFile(app::SettingsFilePath(), toSave);
         playlist.SaveM3U(app::SessionPlaylistPath());
+        app::SaveEqPerSongFile(app::EqPerSongPath(), perSongEqBands);
     }
 
     SDL_DestroyRenderer(aboutRenderer);

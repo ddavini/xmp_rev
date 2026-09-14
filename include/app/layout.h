@@ -184,7 +184,16 @@ constexpr int kEqSliderX0 = 36, kEqSliderPitch = 28, kEqSliderW = 16;
 constexpr int kEqSliderTrackY = 22, kEqSliderTrackH = 65;
 constexpr int kEqArrowSize = 14;
 constexpr int kEqFreqLabelY = 91;
-constexpr int kEqPresetX0 = 6, kEqPresetY = 103, kEqPresetBtnW = 60, kEqPresetH = 18, kEqPresetGap = 3;
+// Preset buttons narrowed from 60 to 50 (still comfortably fits the
+// widest label, "TREBLE") to share the row with the per-song EQ toggle
+// below, rather than growing the window for a whole extra row.
+constexpr int kEqPresetX0 = 6, kEqPresetY = 103, kEqPresetBtnW = 50, kEqPresetH = 18, kEqPresetGap = 3;
+// Per-song EQ toggle: same row as the presets, in the width they freed up
+// on the right. Same fixed-label/color-only-active convention as
+// drawToggle's PL/EQ buttons on Main (label doesn't change with state),
+// since "SONG" is too short to also spell out on/off - color carries it.
+constexpr int kEqPerSongX = kEqPresetX0 + 5 * (kEqPresetBtnW + kEqPresetGap), kEqPerSongY = kEqPresetY;
+constexpr int kEqPerSongW = kEqWindowW - kEqPerSongX - 6, kEqPerSongH = kEqPresetH;
 
 // Info window (new - not in the original as a fourth always-visible window;
 // frmInfo.frm was a modal popup, toggled here instead like EQ/Playlist).

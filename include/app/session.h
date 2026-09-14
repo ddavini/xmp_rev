@@ -2,6 +2,7 @@
 
 #include <array>
 #include <string>
+#include <unordered_map>
 
 // Session persistence: TODO's "save settings on exit (visualizer active,
 // volume, playing, stopped, playlist)", plus XSound (added after the user
@@ -36,6 +37,13 @@ struct Settings {
     // back to that preset's fixed values.
     int eqPreset = -1;
     std::array<int, 10> eqBands{};
+    // TODO: "per song equalization setting". Off (default) = today's
+    // behavior, eqBands above applies globally to every track. On = each
+    // track's own bands are looked up/recalled on open instead - see
+    // EqPerSongPath()/SerializeEqPerSong below, kept in a separate file
+    // rather than here since it's keyed data (per track), not a single
+    // flat value like the rest of this struct.
+    bool perSongEq = false;
     // TODO: "visualizations missing from the original" - which of the
     // three panels sharing the analyzer's box is showing: 0=analyzer
     // (see main.cpp's VisPanel enum for the full mapping), 1=idle logo,
@@ -54,16 +62,30 @@ struct Settings {
 std::string SerializeSettings(const Settings& s);
 bool ParseSettings(const std::string& text, Settings& out);
 
-// Where the settings file and the resumed session's playlist live. A flat
-// ~/.xmad-revival directory (created on first save if missing), not the
-// original's App.Path\xmp.ini - this targets an installed app on
-// macOS/Linux, neither of which has Windows' "next to the executable"
-// convention.
+// Per-track EQ bands for the perSongEq feature above - one line per track,
+// "path=band0,band1,...,band9", same comma-separated-bands convention as
+// SerializeSettings' EQBANDS line, just keyed by path instead of a fixed
+// key name. Same tolerant-parsing philosophy as ParseSettings: a
+// malformed or short line is skipped/truncated rather than rejecting the
+// whole file. A track with no entry here (e.g. never played with
+// perSongEq on) has no saved bands at all - the caller's job to decide
+// what "flat" means, not this parser's.
+std::string SerializeEqPerSong(const std::unordered_map<std::string, std::array<int, 10>>& bands);
+bool ParseEqPerSong(const std::string& text, std::unordered_map<std::string, std::array<int, 10>>& out);
+
+// Where the settings file, the resumed session's playlist, and the
+// per-song EQ file live. A flat ~/.xmad-revival directory (created on
+// first save if missing), not the original's App.Path\xmp.ini - this
+// targets an installed app on macOS/Linux, neither of which has Windows'
+// "next to the executable" convention.
 std::string SettingsFilePath();
 std::string SessionPlaylistPath();
+std::string EqPerSongPath();
 
 // Thin OS-touching wrappers around the pure functions above.
 bool SaveSettingsFile(const std::string& path, const Settings& s);
 bool LoadSettingsFile(const std::string& path, Settings& out);
+bool SaveEqPerSongFile(const std::string& path, const std::unordered_map<std::string, std::array<int, 10>>& bands);
+bool LoadEqPerSongFile(const std::string& path, std::unordered_map<std::string, std::array<int, 10>>& out);
 
 } // namespace xmad::app
