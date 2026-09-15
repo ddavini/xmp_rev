@@ -58,6 +58,12 @@ struct Settings {
     // flags (FunzioniGlobali.bas), collapsed into one field since exactly
     // one of those three is ever true at a time in practice.
     int visPanel = 0;
+    // TODO: "Add a setting for UI scale / text+button size" - one of
+    // {100, 125, 150} (main.cpp's SnapUiScalePercent snaps anything else,
+    // e.g. a corrupt/future value, back to the 100 default). Applies to
+    // every window's size/position and the mouse-hit-test coordinate
+    // conversion, not just drawing - see main.cpp's `scale`.
+    int uiScalePercent = 100;
 };
 
 // Pure parsing/serialization - no filesystem access, so directly

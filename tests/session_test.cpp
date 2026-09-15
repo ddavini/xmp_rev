@@ -40,6 +40,7 @@ int main() {
         s.eqBands = {60, 40, 20, 0, -20, -20, 0, 20, 40, 60};
         s.visPanel = 2;
         s.perSongEq = true;
+        s.uiScalePercent = 125;
         const std::string text = SerializeSettings(s);
 
         Settings parsed;
@@ -56,6 +57,7 @@ int main() {
         Check(parsed.eqBands == s.eqBands, "round-trip: eqBands");
         Check(parsed.visPanel == 2, "round-trip: visPanel");
         Check(parsed.perSongEq == true, "round-trip: perSongEq");
+        Check(parsed.uiScalePercent == 125, "round-trip: uiScalePercent");
     }
 
     // wasPaused round-trips independently of wasPlaying - the fix for
@@ -116,6 +118,7 @@ int main() {
         Check(parsed.eqBands == Settings{}.eqBands, "missing key keeps default (eqBands)");
         Check(parsed.visPanel == 0, "missing key keeps default (visPanel)");
         Check(parsed.perSongEq == false, "missing key keeps default (perSongEq)");
+        Check(parsed.uiScalePercent == 100, "missing key keeps default (uiScalePercent)");
     }
 
     // EQBANDS tolerates fewer fields than expected (fills what's present,

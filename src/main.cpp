@@ -28,6 +28,7 @@
 #include "app/file_dialog.h"
 #include "app/layout.h"
 #ifdef __APPLE__
+#include "app/main_menu.h"
 #include "app/media_remote.h"
 #include "app/menu_bar_icon.h"
 #endif
@@ -74,6 +75,42 @@ void ApplyHiDpiRenderScale(SDL_Renderer* renderer, int logicalW, int logicalH) {
     int outW = logicalW, outH = logicalH;
     SDL_GetRendererOutputSize(renderer, &outW, &outH);
     SDL_RenderSetScale(renderer, static_cast<float>(outW) / logicalW, static_cast<float>(outH) / logicalH);
+}
+
+// TODO: "Add a setting for UI scale / text+button size". Snaps any stored
+// value - including a corrupt/future one read back from settings.cfg - to
+// the nearest of the three levels this app actually supports, rather than
+// trusting the raw number all the way into window-size arithmetic.
+int SnapUiScalePercent(int raw) {
+    static constexpr int kLevels[] = {100, 125, 150};
+    int best = kLevels[0];
+    for (int lvl : kLevels) {
+        if (std::abs(lvl - raw) < std::abs(best - raw)) best = lvl;
+    }
+    return best;
+}
+
+int ScaledDim(int logical, double scale) { return static_cast<int>(std::lround(logical * scale)); }
+
+// TODO: "Add a setting for UI scale / text+button size" - the shared
+// stacking geometry for all 5 windows at a given scale/anchor. Computed
+// once at startup and again on every live rescale (see applyUiScale in
+// main()), so there's exactly one place this stacking math lives.
+struct WindowLayout {
+    SDL_Rect main, eq, playlist, info, about;
+};
+WindowLayout ComputeWindowLayout(double scale, int mainX, int mainY) {
+    WindowLayout L;
+    L.main = {mainX, mainY, ScaledDim(app::layout::kWindowW, scale), ScaledDim(app::layout::kWindowH, scale)};
+    L.eq = {mainX, mainY + L.main.h, ScaledDim(app::layout::kEqWindowW, scale),
+            ScaledDim(app::layout::kEqWindowH, scale)};
+    L.playlist = {mainX, mainY + L.main.h + L.eq.h, ScaledDim(app::layout::kPlaylistWindowW, scale),
+                  ScaledDim(app::layout::kPlaylistWindowH, scale)};
+    L.info = {mainX + L.main.w, mainY, ScaledDim(app::layout::kInfoWindowW, scale),
+              ScaledDim(app::layout::kInfoWindowH, scale)};
+    L.about = {mainX + L.main.w, mainY + L.info.h, ScaledDim(app::layout::kAboutWindowW, scale),
+               ScaledDim(app::layout::kAboutWindowH, scale)};
+    return L;
 }
 
 void DrawTextureAt(SDL_Renderer* renderer, SDL_Texture* tex, int x, int y) {
@@ -501,9 +538,40 @@ int main(int argc, char** argv) {
     // above, then handled in processEvent below.
     const Uint32 kMediaRemoteEventType = SDL_RegisterEvents(1);
     app::EnableMediaRemoteCommands(kMediaRemoteEventType);
+
+    // TODO: "Add a setting for UI scale / text+button size" - the View
+    // menu's 100/125/150% items and Zoom In/Out/Reset (Cmd+/Cmd-/Cmd+0)
+    // push this event, consumed in processEvent below via applyUiScale.
+    // Installed onto NSApp's existing mainMenu (see main_menu.h) rather
+    // than a from-scratch menu bar.
+    const Uint32 kUiScaleEventType = SDL_RegisterEvents(1);
+    app::InstallUiScaleMenu(kUiScaleEventType);
 #endif
 
-    const int scale = 1;
+    // TODO: "Add a setting for UI scale / text+button size" - loaded here,
+    // independently of the resumeSession-gated settings load further
+    // below, since a display preference should apply on every launch
+    // (including an explicit --playlist run), not just when resuming the
+    // last session. Forced to 100 for --dump-*-frame so those headless
+    // verification runs stay deterministic regardless of a saved
+    // preference. Reads settings.cfg a second time (the resumeSession
+    // block re-reads it later for its own fields) - a deliberately cheap,
+    // additive trade-off rather than restructuring that block's ordering.
+    int uiScalePercent = 100;
+    {
+        app::Settings scalePrefs;
+        if (app::LoadSettingsFile(app::SettingsFilePath(), scalePrefs)) {
+            uiScalePercent = SnapUiScalePercent(scalePrefs.uiScalePercent);
+        }
+    }
+    const bool dumpingAnyFrameEarly = !dumpFramePath.empty() || !dumpPlaylistFramePath.empty() ||
+                                       !dumpEqFramePath.empty() || !dumpInfoFramePath.empty() ||
+                                       !dumpAboutFramePath.empty();
+    if (dumpingAnyFrameEarly) uiScalePercent = 100;
+    double scale = uiScalePercent / 100.0;
+#ifdef __APPLE__
+    app::SetUiScaleMenuChecked(uiScalePercent); // reflect a resumed non-default scale immediately
+#endif
     // Borderless: matches the original's BorderStyle=0 (fully custom-drawn,
     // no OS title bar/chrome). This means there's no native close button or
     // way to drag the window by a title bar anymore - both are implemented
@@ -518,12 +586,12 @@ int main(int argc, char** argv) {
     // exactly the "can't reach the playlist" symptom this was reported as.
     SDL_Rect usable{};
     SDL_GetDisplayUsableBounds(0, &usable);
-    const int startX = usable.x + std::max(0, (usable.w - app::layout::kWindowW * scale) / 2);
+    const int startX = usable.x + std::max(0, (usable.w - ScaledDim(app::layout::kWindowW, scale)) / 2);
     const int startY = usable.y + 8;
 
-    SDL_Window* window =
-        SDL_CreateWindow("X.MaD Player Revival", startX, startY, app::layout::kWindowW * scale,
-                          app::layout::kWindowH * scale, kWindowFlags);
+    SDL_Window* window = SDL_CreateWindow("X.MaD Player Revival", startX, startY,
+                                           ScaledDim(app::layout::kWindowW, scale),
+                                           ScaledDim(app::layout::kWindowH, scale), kWindowFlags);
     if (!window) {
         std::cerr << "SDL_CreateWindow failed: " << SDL_GetError() << "\n";
         return 1;
@@ -553,14 +621,18 @@ int main(int argc, char** argv) {
 
     int mainX, mainY;
     SDL_GetWindowPosition(window, &mainX, &mainY);
+    const WindowLayout initialLayout = ComputeWindowLayout(scale, mainX, mainY);
 
     // Back to a single vertical column (Main / EQ / Playlist, Playlist at
     // the bottom) - side-by-side was a stopgap for a too-tall stack at 2x
     // scale; at native 1x scale (see `scale` above) the full column is
     // short enough to fit, and stacked reads better than side-by-side.
-    SDL_Window* eqWindow = SDL_CreateWindow("X.MaD Player Revival - Equalizer", mainX,
-                                             mainY + app::layout::kWindowH * scale, app::layout::kEqWindowW * scale,
-                                             app::layout::kEqWindowH * scale, kWindowFlags);
+    // (150%, the largest scale this app's UI-scale setting offers, still
+    // fits: (155+130+140)*1.5 = 638px, well under a typical usable
+    // display height - no side-by-side fallback needed.)
+    SDL_Window* eqWindow =
+        SDL_CreateWindow("X.MaD Player Revival - Equalizer", initialLayout.eq.x, initialLayout.eq.y,
+                          initialLayout.eq.w, initialLayout.eq.h, kWindowFlags);
     if (!eqWindow) {
         std::cerr << "SDL_CreateWindow (eq) failed: " << SDL_GetError() << "\n";
         return 1;
@@ -573,9 +645,8 @@ int main(int argc, char** argv) {
     ApplyHiDpiRenderScale(eqRenderer, app::layout::kEqWindowW, app::layout::kEqWindowH);
 
     SDL_Window* plWindow =
-        SDL_CreateWindow("X.MaD Player Revival - Playlist", mainX,
-                          mainY + (app::layout::kWindowH + app::layout::kEqWindowH) * scale,
-                          app::layout::kPlaylistWindowW * scale, app::layout::kPlaylistWindowH * scale, kWindowFlags);
+        SDL_CreateWindow("X.MaD Player Revival - Playlist", initialLayout.playlist.x, initialLayout.playlist.y,
+                          initialLayout.playlist.w, initialLayout.playlist.h, kWindowFlags);
     if (!plWindow) {
         std::cerr << "SDL_CreateWindow (playlist) failed: " << SDL_GetError() << "\n";
         return 1;
@@ -593,8 +664,8 @@ int main(int argc, char** argv) {
     // doesn't need a stacking slot of its own. Starts hidden; the Info
     // button toggles it (see toggleSecondaryWindow below).
     SDL_Window* infoWindow =
-        SDL_CreateWindow("X.MaD Player Revival - Info", mainX + app::layout::kWindowW * scale, mainY,
-                          app::layout::kInfoWindowW * scale, app::layout::kInfoWindowH * scale, kWindowFlags);
+        SDL_CreateWindow("X.MaD Player Revival - Info", initialLayout.info.x, initialLayout.info.y,
+                          initialLayout.info.w, initialLayout.info.h, kWindowFlags);
     if (!infoWindow) {
         std::cerr << "SDL_CreateWindow (info) failed: " << SDL_GetError() << "\n";
         return 1;
@@ -614,9 +685,8 @@ int main(int argc, char** argv) {
     // clicking the shock/LOGOJAP icon on Main (see kShockX's hit-test
     // below) - see layout.h's kAboutWindow* comment for why that icon.
     SDL_Window* aboutWindow =
-        SDL_CreateWindow("X.MaD Player Revival - About", mainX + app::layout::kWindowW * scale,
-                          mainY + app::layout::kInfoWindowH * scale, app::layout::kAboutWindowW * scale,
-                          app::layout::kAboutWindowH * scale, kWindowFlags);
+        SDL_CreateWindow("X.MaD Player Revival - About", initialLayout.about.x, initialLayout.about.y,
+                          initialLayout.about.w, initialLayout.about.h, kWindowFlags);
     if (!aboutWindow) {
         std::cerr << "SDL_CreateWindow (about) failed: " << SDL_GetError() << "\n";
         return 1;
@@ -3032,6 +3102,46 @@ int main(int argc, char** argv) {
         return lx >= rx && lx < rx + rw && ly >= ry && ly < ry + rh;
     };
 
+    // TODO: "Add a setting for UI scale / text+button size" - the live
+    // rescale entry point, called from the View menu / Cmd+/-/0 (see
+    // processEvent's kUiScaleEventType branch below). Re-stacks all 5
+    // windows relative to Main's *current* position - if EQ/Playlist/Info/
+    // About had been dragged elsewhere, a rescale re-docks them into the
+    // standard column rather than trying to rescale an arbitrary undocked
+    // offset. ApplyHiDpiRenderScale is safe to call repeatedly (just
+    // re-queries the real backing-store size each time); CachedTextTexture
+    // keys on logical text/field-width, never window pixel size, so it
+    // needs no invalidation here.
+    auto applyUiScale = [&](int requestedPercent) {
+        uiScalePercent = SnapUiScalePercent(requestedPercent);
+        scale = uiScalePercent / 100.0;
+        int curMainX, curMainY;
+        SDL_GetWindowPosition(window, &curMainX, &curMainY);
+        const WindowLayout L = ComputeWindowLayout(scale, curMainX, curMainY);
+
+        SDL_SetWindowSize(window, L.main.w, L.main.h);
+        ApplyHiDpiRenderScale(renderer, app::layout::kWindowW, app::layout::kWindowH);
+
+        SDL_SetWindowSize(eqWindow, L.eq.w, L.eq.h);
+        SDL_SetWindowPosition(eqWindow, L.eq.x, L.eq.y);
+        ApplyHiDpiRenderScale(eqRenderer, app::layout::kEqWindowW, app::layout::kEqWindowH);
+
+        SDL_SetWindowSize(plWindow, L.playlist.w, L.playlist.h);
+        SDL_SetWindowPosition(plWindow, L.playlist.x, L.playlist.y);
+        ApplyHiDpiRenderScale(plRenderer, app::layout::kPlaylistWindowW, app::layout::kPlaylistWindowH);
+
+        SDL_SetWindowSize(infoWindow, L.info.w, L.info.h);
+        SDL_SetWindowPosition(infoWindow, L.info.x, L.info.y);
+        ApplyHiDpiRenderScale(infoRenderer, app::layout::kInfoWindowW, app::layout::kInfoWindowH);
+
+        SDL_SetWindowSize(aboutWindow, L.about.w, L.about.h);
+        SDL_SetWindowPosition(aboutWindow, L.about.x, L.about.y);
+        ApplyHiDpiRenderScale(aboutRenderer, app::layout::kAboutWindowW, app::layout::kAboutWindowH);
+#ifdef __APPLE__
+        app::SetUiScaleMenuChecked(uiScalePercent);
+#endif
+    };
+
     // Shared by the real interactive loop below AND the --sim-click-*
     // debug hooks (see the dump-frame branch just below) - so a synthetic
     // event exercises the exact same SDL coordinate math and hit-testing a
@@ -3090,6 +3200,24 @@ int main(int argc, char** argv) {
                 case app::MediaRemoteCommand::Pause: handleTransportPress(TransportAction::Pause); break;
                 case app::MediaRemoteCommand::Next: handleTransportPress(TransportAction::Next); break;
                 case app::MediaRemoteCommand::Previous: handleTransportPress(TransportAction::Back); break;
+            }
+        }
+        // TODO: "Add a setting for UI scale / text+button size" - posted
+        // by main_menu.mm's View-menu items and their Cmd+/-/0 key
+        // equivalents.
+        if (ev.type == kUiScaleEventType) {
+            static constexpr int kLevels[] = {100, 125, 150};
+            int idx = 0;
+            for (int i = 0; i < 3; ++i) {
+                if (kLevels[i] == uiScalePercent) idx = i;
+            }
+            switch (static_cast<app::UiScaleMenuAction>(ev.user.code)) {
+                case app::UiScaleMenuAction::Set100: applyUiScale(100); break;
+                case app::UiScaleMenuAction::Set125: applyUiScale(125); break;
+                case app::UiScaleMenuAction::Set150: applyUiScale(150); break;
+                case app::UiScaleMenuAction::ZoomIn: applyUiScale(kLevels[std::min(idx + 1, 2)]); break;
+                case app::UiScaleMenuAction::ZoomOut: applyUiScale(kLevels[std::max(idx - 1, 0)]); break;
+                case app::UiScaleMenuAction::Reset: applyUiScale(100); break;
             }
         }
 #else
@@ -3233,7 +3361,7 @@ int main(int argc, char** argv) {
                 SDL_RaiseWindow(clicked);
             }
 
-            const int lx = ev.button.x / scale, ly = ev.button.y / scale;
+            const int lx = static_cast<int>(ev.button.x / scale), ly = static_cast<int>(ev.button.y / scale);
             if (ev.button.windowID == mainWindowID) {
                 if (ejectMenuOpen) {
                     // Mirrors the Playlist window's Save-menu pattern: any
@@ -3369,14 +3497,14 @@ int main(int argc, char** argv) {
             // leave the drag frozen mid-air even though the window itself
             // never got a mouse-up.
             if (volDragging && ev.motion.windowID == mainWindowID) {
-                handleVolSliderClickAt(ev.motion.y / scale);
+                handleVolSliderClickAt(static_cast<int>(ev.motion.y / scale));
             }
             if (seekDragging && ev.motion.windowID == mainWindowID) {
-                handleSeekBarClickAt(ev.motion.x / scale);
+                handleSeekBarClickAt(static_cast<int>(ev.motion.x / scale));
             }
             if (ev.motion.windowID == mainWindowID) {
-                mainMouseX = ev.motion.x / scale;
-                mainMouseY = ev.motion.y / scale;
+                mainMouseX = static_cast<int>(ev.motion.x / scale);
+                mainMouseY = static_cast<int>(ev.motion.y / scale);
             }
         } else if (ev.type == SDL_WINDOWEVENT && ev.window.event == SDL_WINDOWEVENT_LEAVE &&
                    ev.window.windowID == mainWindowID) {
@@ -3451,8 +3579,8 @@ int main(int argc, char** argv) {
         // processEvent the interactive loop uses - unlike --specmode-clicks
         // above, this exercises SDL's own coordinate/window-ID plumbing and
         // the rect hit-test, not just the handler lambda directly.
-        const int cx = (kSpecModeX + kTransportBtnW / 2) * scale;
-        const int cy = (kSpecModeY + kTransportBtnH / 2) * scale;
+        const int cx = ScaledDim(kSpecModeX + kTransportBtnW / 2, scale);
+        const int cy = ScaledDim(kSpecModeY + kTransportBtnH / 2, scale);
         for (int i = 0; i < simClickSpecModeCount; ++i) {
             SDL_Event down{};
             down.type = SDL_MOUSEBUTTONDOWN;
@@ -3490,16 +3618,16 @@ int main(int argc, char** argv) {
         down.type = SDL_MOUSEBUTTONDOWN;
         down.button.button = SDL_BUTTON_LEFT;
         down.button.windowID = targetID;
-        down.button.x = lx * scale;
-        down.button.y = ly * scale;
+        down.button.x = ScaledDim(lx, scale);
+        down.button.y = ScaledDim(ly, scale);
         processEvent(down);
 
         SDL_Event up{};
         up.type = SDL_MOUSEBUTTONUP;
         up.button.button = SDL_BUTTON_LEFT;
         up.button.windowID = targetID;
-        up.button.x = lx * scale;
-        up.button.y = ly * scale;
+        up.button.x = ScaledDim(lx, scale);
+        up.button.y = ScaledDim(ly, scale);
         processEvent(up);
 
         int px, py, ex, ey;
@@ -3523,8 +3651,8 @@ int main(int argc, char** argv) {
         SDL_Event motion{};
         motion.type = SDL_MOUSEMOTION;
         motion.motion.windowID = mainWindowID;
-        motion.motion.x = hoverX * scale;
-        motion.motion.y = hoverY * scale;
+        motion.motion.x = ScaledDim(hoverX, scale);
+        motion.motion.y = ScaledDim(hoverY, scale);
         processEvent(motion);
         std::cout << "hover (" << hoverX << "," << hoverY << "): mainMouseX=" << mainMouseX
                   << " mainMouseY=" << mainMouseY << "\n";
@@ -3548,28 +3676,31 @@ int main(int argc, char** argv) {
             if (visPauseFirst) engine.Pause();
             for (int i = 0; i < visTicks; ++i) drawFrame(); // step the fall/decay animation without presenting
             SDL_RenderPresent(renderer);
-            ok &= dumpRenderTarget(renderer, kWindowW * scale, kWindowH * scale, dumpFramePath);
+            ok &= dumpRenderTarget(renderer, ScaledDim(kWindowW, scale), ScaledDim(kWindowH, scale), dumpFramePath);
         }
         if (!dumpPlaylistFramePath.empty()) {
             drawPlaylistFrame();
             SDL_RenderPresent(plRenderer);
-            ok &= dumpRenderTarget(plRenderer, kPlaylistWindowW * scale, kPlaylistWindowH * scale,
+            ok &= dumpRenderTarget(plRenderer, ScaledDim(kPlaylistWindowW, scale), ScaledDim(kPlaylistWindowH, scale),
                                     dumpPlaylistFramePath);
         }
         if (!dumpEqFramePath.empty()) {
             drawEqFrame();
             SDL_RenderPresent(eqRenderer);
-            ok &= dumpRenderTarget(eqRenderer, kEqWindowW * scale, kEqWindowH * scale, dumpEqFramePath);
+            ok &= dumpRenderTarget(eqRenderer, ScaledDim(kEqWindowW, scale), ScaledDim(kEqWindowH, scale),
+                                    dumpEqFramePath);
         }
         if (!dumpInfoFramePath.empty()) {
             drawInfoFrame();
             SDL_RenderPresent(infoRenderer);
-            ok &= dumpRenderTarget(infoRenderer, kInfoWindowW * scale, kInfoWindowH * scale, dumpInfoFramePath);
+            ok &= dumpRenderTarget(infoRenderer, ScaledDim(kInfoWindowW, scale), ScaledDim(kInfoWindowH, scale),
+                                    dumpInfoFramePath);
         }
         if (!dumpAboutFramePath.empty()) {
             drawAboutFrame();
             SDL_RenderPresent(aboutRenderer);
-            ok &= dumpRenderTarget(aboutRenderer, kAboutWindowW * scale, kAboutWindowH * scale, dumpAboutFramePath);
+            ok &= dumpRenderTarget(aboutRenderer, ScaledDim(kAboutWindowW, scale), ScaledDim(kAboutWindowH, scale),
+                                    dumpAboutFramePath);
         }
 
         SDL_DestroyRenderer(aboutRenderer);
@@ -3750,6 +3881,7 @@ int main(int argc, char** argv) {
         toSave.eqPreset = eqCurrentPreset;
         toSave.visPanel = static_cast<int>(visPanel);
         toSave.perSongEq = perSongEqEnabled;
+        toSave.uiScalePercent = uiScalePercent;
         for (int b = 0; b < audio::Equalizer::kBands; ++b) {
             toSave.eqBands[static_cast<size_t>(b)] = engine.EqBand(b);
         }
