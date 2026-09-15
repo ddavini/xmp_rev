@@ -4,3 +4,7 @@ This project is a recoding from scratch using the original assets and source cod
 
 
 Fair Warning: I stopped being a developer a while ago so for this project I used Claude Code. So be warned, this is mostly vibe coded.
+
+## License
+
+GPL-3.0 - see [LICENSE](LICENSE).
