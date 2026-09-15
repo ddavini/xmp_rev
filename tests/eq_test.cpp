@@ -5,6 +5,7 @@
 #include "audio/equalizer.h"
 #include "dsp/fft.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <vector>
@@ -75,6 +76,100 @@ int main() {
     if (deltaCut > -9.0 || deltaCut < -15.0) {
         std::printf("FAIL: cut at target frequency not close to -12dB\n");
         ok = false;
+    }
+
+    // Regression test: bands above Nyquist used to make the biquad
+    // unconditionally unstable (w0 >= pi flips alpha negative), blowing the
+    // filter state up to Inf/NaN within milliseconds and silencing output.
+    // At 22050 Hz, Nyquist is 11025 Hz, so bands 7/8/9 (12k/14k/16k) are
+    // above it -- mirrors the ROCK/POP/TREBLE presets that trigger this.
+    {
+        constexpr int kLowRate = 22050;
+        xmad::audio::Equalizer treble;
+        treble.Reset(kLowRate, 2);
+        treble.SetBandValue(7, 127);
+        treble.SetBandValue(8, 127);
+        treble.SetBandValue(9, 127);
+
+        std::vector<float> buf(static_cast<size_t>(kN) * 2);
+        for (int i = 0; i < kN; ++i) {
+            const float s = static_cast<float>(std::sin(2.0 * M_PI * 1000.0 * i / kLowRate));
+            buf[static_cast<size_t>(i) * 2] = s;
+            buf[static_cast<size_t>(i) * 2 + 1] = s;
+        }
+        treble.Process(buf.data(), kN);
+
+        bool allFinite = true;
+        float peakAbs = 0.0f;
+        for (float v : buf) {
+            if (!std::isfinite(v)) allFinite = false;
+            peakAbs = std::max(peakAbs, std::abs(v));
+        }
+        if (!allFinite) {
+            std::printf("FAIL: 22050Hz treble EQ produced non-finite output\n");
+            ok = false;
+        }
+        if (peakAbs > 100.0f) {
+            std::printf("FAIL: 22050Hz treble EQ output magnitude exploded (peak=%.2f)\n", peakAbs);
+            ok = false;
+        }
+    }
+
+    // A band above Nyquist has no content to boost/cut, so it should bypass
+    // to a true no-op rather than just "not blow up."
+    {
+        constexpr int kLowRate = 22050;
+        xmad::audio::Equalizer bypassed;
+        bypassed.Reset(kLowRate, 2);
+        bypassed.SetBandValue(9, 127); // 16000 Hz, above the 11025 Hz Nyquist
+
+        std::vector<float> in(static_cast<size_t>(kN) * 2);
+        for (int i = 0; i < kN; ++i) {
+            const float s = static_cast<float>(std::sin(2.0 * M_PI * 1000.0 * i / kLowRate));
+            in[static_cast<size_t>(i) * 2] = in[static_cast<size_t>(i) * 2 + 1] = s;
+        }
+        std::vector<float> out = in;
+        bypassed.Process(out.data(), kN);
+
+        double maxDiff = 0.0;
+        for (size_t i = 0; i < in.size(); ++i) maxDiff = std::max(maxDiff, static_cast<double>(std::abs(out[i] - in[i])));
+        if (maxDiff > 1e-6) {
+            std::printf("FAIL: bypassed band above Nyquist altered the signal (maxDiff=%.8f)\n", maxDiff);
+            ok = false;
+        }
+    }
+
+    // Exact-Nyquist boundary: at 24000 Hz, band 7 (12000 Hz) sits exactly at
+    // Nyquist. A strict '>' check (instead of '>=') would miss this and fall
+    // through to the marginally-stable w0==pi case.
+    {
+        constexpr int kBoundaryRate = 24000;
+        xmad::audio::Equalizer boundary;
+        boundary.Reset(kBoundaryRate, 2);
+        boundary.SetBandValue(7, 127);
+
+        std::vector<float> buf(static_cast<size_t>(kN) * 2);
+        for (int i = 0; i < kN; ++i) {
+            const float s = static_cast<float>(std::sin(2.0 * M_PI * 1000.0 * i / kBoundaryRate));
+            buf[static_cast<size_t>(i) * 2] = s;
+            buf[static_cast<size_t>(i) * 2 + 1] = s;
+        }
+        boundary.Process(buf.data(), kN);
+
+        bool allFinite = true;
+        float peakAbs = 0.0f;
+        for (float v : buf) {
+            if (!std::isfinite(v)) allFinite = false;
+            peakAbs = std::max(peakAbs, std::abs(v));
+        }
+        if (!allFinite) {
+            std::printf("FAIL: 24000Hz exact-Nyquist band produced non-finite output\n");
+            ok = false;
+        }
+        if (peakAbs > 100.0f) {
+            std::printf("FAIL: 24000Hz exact-Nyquist band output magnitude exploded (peak=%.2f)\n", peakAbs);
+            ok = false;
+        }
     }
 
     std::printf(ok ? "PASS\n" : "FAIL\n");

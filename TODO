@@ -1,2 +1,3 @@
 - Add a setting for UI scale / text+button size (default stays as-is; a tester found it too small)
 - decide license
+- Look into porting to iOS for Carplay integration

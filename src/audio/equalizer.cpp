@@ -43,6 +43,23 @@ void Equalizer::SetBandValue(int band, int value) {
 }
 
 void Equalizer::RecomputeBand(int band) {
+    const double nyquist = sampleRate_ / 2.0;
+    if (kFrequenciesHz[static_cast<size_t>(band)] >= nyquist) {
+        // No content exists at/above Nyquist for this source's sample rate;
+        // RBJ peaking coefficients are unconditionally unstable here (w0 >= pi
+        // flips alpha negative, pushing poles outside the unit circle), so
+        // bypass this band to an identity filter instead of boosting/cutting
+        // nothing.
+        for (auto& f : filters_[static_cast<size_t>(band)]) {
+            f.b0 = 1.0;
+            f.b1 = 0.0;
+            f.b2 = 0.0;
+            f.a1 = 0.0;
+            f.a2 = 0.0;
+        }
+        return;
+    }
+
     // -127..127 -> -12dB..+12dB, per frmEQ.frm's Form_Load legend.
     const double gainDb = (gains_[static_cast<size_t>(band)].load() / 127.0) * 12.0;
 
