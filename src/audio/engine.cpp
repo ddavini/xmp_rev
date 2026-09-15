@@ -79,6 +79,9 @@ bool Engine::Open(const std::string& path) {
     // Recomputes filter coefficients/state for the new rate; band gains
     // (user's EQ settings) are untouched, so they persist across tracks.
     eq_.Reset(decoder_->sampleRate(), static_cast<int>(decoder_->channels()));
+    compressor_.Reset(decoder_->sampleRate(), static_cast<int>(decoder_->channels()));
+    chorus_.Reset(decoder_->sampleRate(), static_cast<int>(decoder_->channels()));
+    reverb_.Reset(decoder_->sampleRate(), static_cast<int>(decoder_->channels()));
 
     framesConsumed_ = 0;
     seekTargetFrame_ = UINT64_MAX;
@@ -182,6 +185,10 @@ void Engine::DecodeThreadMain() {
             continue;
         }
         eq_.Process(chunk.data(), got);
+        if (compressionOn_.load()) compressor_.Process(chunk.data(), got);
+        if (saturationOn_.load()) ApplySaturation(chunk.data(), got, channels);
+        if (chorusOn_.load()) chorus_.Process(chunk.data(), got);
+        if (reverbOn_.load()) reverb_.Process(chunk.data(), got);
         if (xSound_.load()) ApplyStereoWiden(chunk.data(), got, channels, kXSoundWidth);
         ring_->Push(chunk.data(), got);
     }

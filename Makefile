@@ -101,6 +101,26 @@ $(BUILD)/stereo_widen_test: tests/stereo_widen_test.cpp $(BUILD)/audio/stereo_wi
 	@mkdir -p $(BUILD)
 	$(CXX) -std=c++20 -O2 -Wall -Wextra -Iinclude $^ -o $@
 
+# --- saturation waveshaper test - harmonic content via FFT, no SDL dep ------
+$(BUILD)/saturation_test: tests/saturation_test.cpp $(BUILD)/audio/saturation.o $(DSP_OBJS)
+	@mkdir -p $(BUILD)
+	$(CXX) $(CXXFLAGS) $^ -o $@
+
+# --- compressor gain-reduction test - pure math, no SDL ---------------------
+$(BUILD)/compressor_test: tests/compressor_test.cpp $(BUILD)/audio/compressor.o
+	@mkdir -p $(BUILD)
+	$(CXX) -std=c++20 -O2 -Wall -Wextra -Iinclude $^ -o $@
+
+# --- chorus modulated-delay test - pure math, no SDL -------------------------
+$(BUILD)/chorus_test: tests/chorus_test.cpp $(BUILD)/audio/chorus.o
+	@mkdir -p $(BUILD)
+	$(CXX) -std=c++20 -O2 -Wall -Wextra -Iinclude $^ -o $@
+
+# --- reverb comb/allpass network test - pure math, no SDL --------------------
+$(BUILD)/reverb_test: tests/reverb_test.cpp $(BUILD)/audio/reverb.o
+	@mkdir -p $(BUILD)
+	$(CXX) -std=c++20 -O2 -Wall -Wextra -Iinclude $^ -o $@
+
 # --- channel-level LED gradient test - pure color math, no SDL -------------
 $(BUILD)/level_meter_test: tests/level_meter_test.cpp $(BUILD)/gfx/level_meter.o
 	@mkdir -p $(BUILD)
@@ -188,7 +208,7 @@ dmg: test app
 	@echo "Wrote $(BUILD)/$(DMG_NAME)"
 endif
 
-test: $(BUILD)/fft_smoke_test $(BUILD)/font_render_test $(BUILD)/decoder_test $(BUILD)/engine_smoke_test $(BUILD)/eq_test $(BUILD)/window_snap_test $(BUILD)/file_dialog_test $(BUILD)/session_test $(BUILD)/stereo_widen_test $(BUILD)/tags_test $(BUILD)/level_meter_test $(BUILD)/playlist_test
+test: $(BUILD)/fft_smoke_test $(BUILD)/font_render_test $(BUILD)/decoder_test $(BUILD)/engine_smoke_test $(BUILD)/eq_test $(BUILD)/window_snap_test $(BUILD)/file_dialog_test $(BUILD)/session_test $(BUILD)/stereo_widen_test $(BUILD)/tags_test $(BUILD)/level_meter_test $(BUILD)/playlist_test $(BUILD)/saturation_test $(BUILD)/compressor_test $(BUILD)/chorus_test $(BUILD)/reverb_test
 	./$(BUILD)/fft_smoke_test
 	./$(BUILD)/font_render_test "../xmplayer/Source/Img_new/DISPLAY.bmp" $(BUILD)/font_render.raw
 	./$(BUILD)/decoder_test
@@ -201,6 +221,10 @@ test: $(BUILD)/fft_smoke_test $(BUILD)/font_render_test $(BUILD)/decoder_test $(
 	./$(BUILD)/tags_test
 	./$(BUILD)/level_meter_test
 	./$(BUILD)/playlist_test
+	./$(BUILD)/saturation_test
+	./$(BUILD)/compressor_test
+	./$(BUILD)/chorus_test
+	./$(BUILD)/reverb_test
 
 ifeq ($(UNAME_S),Darwin)
 # Launched through the .app bundle via `open` (not the raw binary) so

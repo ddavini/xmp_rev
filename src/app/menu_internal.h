@@ -21,7 +21,8 @@ namespace xmad::app::detail {
 // in sync.
 NSMenu* BuildViewMenu(uint32_t scaleEventType);
 
-// Same idea for the "Effects" menu (currently just xSound).
+// Same idea for the "Effects" menu (xSound, Reverb, Saturation,
+// Compression, Chorus).
 NSMenu* BuildEffectsMenu(uint32_t effectsEventType);
 
 } // namespace xmad::app::detail

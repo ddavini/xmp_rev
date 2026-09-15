@@ -36,6 +36,10 @@ int main() {
         s.currentIndex = 2;
         s.positionSeconds = 123.456;
         s.xSound = true;
+        s.reverb = true;
+        s.saturation = true;
+        s.compression = true;
+        s.chorus = true;
         s.eqPreset = 1;
         s.eqBands = {60, 40, 20, 0, -20, -20, 0, 20, 40, 60};
         s.visPanel = 2;
@@ -53,6 +57,10 @@ int main() {
         Check(parsed.currentIndex == 2, "round-trip: currentIndex");
         Check(parsed.positionSeconds == 123.456, "round-trip: positionSeconds");
         Check(parsed.xSound == true, "round-trip: xSound");
+        Check(parsed.reverb == true, "round-trip: reverb");
+        Check(parsed.saturation == true, "round-trip: saturation");
+        Check(parsed.compression == true, "round-trip: compression");
+        Check(parsed.chorus == true, "round-trip: chorus");
         Check(parsed.eqPreset == 1, "round-trip: eqPreset");
         Check(parsed.eqBands == s.eqBands, "round-trip: eqBands");
         Check(parsed.visPanel == 2, "round-trip: visPanel");
@@ -114,6 +122,10 @@ int main() {
         Check(parsed.wasPaused == false, "missing key keeps default (wasPaused)");
         Check(parsed.positionSeconds == 0.0, "missing key keeps default (positionSeconds)");
         Check(parsed.xSound == false, "missing key keeps default (xSound)");
+        Check(parsed.reverb == false, "missing key keeps default (reverb)");
+        Check(parsed.saturation == false, "missing key keeps default (saturation)");
+        Check(parsed.compression == false, "missing key keeps default (compression)");
+        Check(parsed.chorus == false, "missing key keeps default (chorus)");
         Check(parsed.eqPreset == -1, "missing key keeps default (eqPreset)");
         Check(parsed.eqBands == Settings{}.eqBands, "missing key keeps default (eqBands)");
         Check(parsed.visPanel == 0, "missing key keeps default (visPanel)");

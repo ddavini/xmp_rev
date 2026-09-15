@@ -11,9 +11,13 @@
 
 #include <SDL2/SDL.h>
 
+#include "audio/chorus.h"
+#include "audio/compressor.h"
 #include "audio/decoder.h"
 #include "audio/equalizer.h"
+#include "audio/reverb.h"
 #include "audio/ring_buffer.h"
+#include "audio/saturation.h"
 #include "audio/stereo_widen.h"
 
 // The playback engine: SDL audio output pulling from a ring buffer that a
@@ -87,6 +91,22 @@ public:
     void SetXSound(bool on) { xSound_.store(on); }
     bool XSound() const { return xSound_.load(); }
 
+    // The 4 fixed-parameter effects below (see their own headers for the
+    // DSP and tunings). Each is a straight on/off toggle - no runtime
+    // parameter adjustment - applied in the decode thread in the order
+    // Compression -> Saturation -> Chorus -> Reverb, after the EQ and
+    // before xSound (see DecodeThreadMain). Named with an explicit "On"
+    // suffix rather than e.g. Reverb()/Chorus(), which would collide with
+    // the DSP class names used for reverb_/chorus_ below.
+    void SetCompressionOn(bool on) { compressionOn_.store(on); }
+    bool CompressionOn() const { return compressionOn_.load(); }
+    void SetSaturationOn(bool on) { saturationOn_.store(on); }
+    bool SaturationOn() const { return saturationOn_.load(); }
+    void SetChorusOn(bool on) { chorusOn_.store(on); }
+    bool ChorusOn() const { return chorusOn_.load(); }
+    void SetReverbOn(bool on) { reverbOn_.store(on); }
+    bool ReverbOn() const { return reverbOn_.load(); }
+
     // Snapshot of the most recent audio actually sent to the output device
     // (captured in the real-time audio callback, so it reflects what's
     // playing *now*, not what the decode thread has buffered ~1s ahead of
@@ -106,6 +126,9 @@ private:
     std::unique_ptr<Decoder> decoder_;
     std::unique_ptr<RingBuffer> ring_;
     Equalizer eq_;
+    Compressor compressor_;
+    Chorus chorus_;
+    Reverb reverb_;
     SDL_AudioDeviceID device_ = 0;
 
     // Default 0.25 matches Form_Load's fresh-install fallback
@@ -113,6 +136,10 @@ private:
     std::atomic<float> volume_{0.25f};
     std::atomic<bool> muted_{false};
     std::atomic<bool> xSound_{false};
+    std::atomic<bool> compressionOn_{false};
+    std::atomic<bool> saturationOn_{false};
+    std::atomic<bool> chorusOn_{false};
+    std::atomic<bool> reverbOn_{false};
 
     mutable std::mutex visMutex_;
     std::vector<float> visSnapshot_;

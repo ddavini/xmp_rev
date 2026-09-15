@@ -35,6 +35,10 @@ struct Settings {
                                    // applied when wasPlaying or wasPaused
                                    // (see main.cpp)
     bool xSound = false;    // Engine::XSound() - mirrors mnuXSound.Checked
+    bool reverb = false;      // Engine::ReverbOn()
+    bool saturation = false;  // Engine::SaturationOn()
+    bool compression = false; // Engine::CompressionOn()
+    bool chorus = false;      // Engine::ChorusOn()
     // TODO: "EQ mode not saved". eqPreset mirrors main.cpp's
     // eqCurrentPreset (-1 = none/manual, matching Form_Load never
     // checking a radio button in the original); eqBands are the actual

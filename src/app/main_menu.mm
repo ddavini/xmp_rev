@@ -3,6 +3,7 @@
 
 #import <Cocoa/Cocoa.h>
 #include <SDL2/SDL.h>
+#include <unordered_map>
 #include <vector>
 
 // Kept private to this translation unit - main_menu.h stays
@@ -39,7 +40,11 @@ std::vector<NSMenuItem*> g125Items;
 std::vector<NSMenuItem*> g150Items;
 
 XmadMenuActionTarget* gEffectsTarget = nil;
-std::vector<NSMenuItem*> gXSoundItems;
+// Keyed by EffectsMenuAction tag; one entry per built instance of each
+// checkable item (the real menu bar's, and - once ShowMenuBarIcon runs -
+// the tray popup's), so SetEffectsMenuChecked below can keep every
+// instance of every effect in sync with a single call.
+std::unordered_map<int32_t, std::vector<NSMenuItem*>> gEffectsItemsByTag;
 } // namespace
 
 namespace xmad::app {
@@ -86,13 +91,19 @@ NSMenu* BuildEffectsMenu(uint32_t effectsEventType) {
         }
 
         NSMenu* effectsMenu = [[NSMenu alloc] initWithTitle:@"Effects"];
-        NSMenuItem* xSoundItem = [effectsMenu addItemWithTitle:@"xSound"
-                                                          action:@selector(onMenuAction:)
-                                                   keyEquivalent:@""];
-        xSoundItem.target = gEffectsTarget;
-        xSoundItem.tag = static_cast<int>(EffectsMenuAction::ToggleXSound);
-
-        gXSoundItems.push_back(xSoundItem);
+        auto addToggle = [&](NSString* title, EffectsMenuAction action) {
+            NSMenuItem* item = [effectsMenu addItemWithTitle:title
+                                                        action:@selector(onMenuAction:)
+                                                 keyEquivalent:@""];
+            item.target = gEffectsTarget;
+            item.tag = static_cast<int>(action);
+            gEffectsItemsByTag[static_cast<int32_t>(action)].push_back(item);
+        };
+        addToggle(@"xSound", EffectsMenuAction::ToggleXSound);
+        addToggle(@"Reverb", EffectsMenuAction::ToggleReverb);
+        addToggle(@"Saturation", EffectsMenuAction::ToggleSaturation);
+        addToggle(@"Compression", EffectsMenuAction::ToggleCompression);
+        addToggle(@"Chorus", EffectsMenuAction::ToggleChorus);
         return effectsMenu;
     }
 }
@@ -133,9 +144,18 @@ void InstallEffectsMenu(uint32_t effectsEventType) {
     }
 }
 
-void SetEffectsMenuChecked(bool xSoundOn) {
+void SetEffectsMenuChecked(const EffectsMenuState& state) {
     @autoreleasepool {
-        for (NSMenuItem* item : gXSoundItems) item.state = xSoundOn ? NSControlStateValueOn : NSControlStateValueOff;
+        auto apply = [](EffectsMenuAction action, bool on) {
+            auto it = gEffectsItemsByTag.find(static_cast<int32_t>(action));
+            if (it == gEffectsItemsByTag.end()) return;
+            for (NSMenuItem* item : it->second) item.state = on ? NSControlStateValueOn : NSControlStateValueOff;
+        };
+        apply(EffectsMenuAction::ToggleXSound, state.xSound);
+        apply(EffectsMenuAction::ToggleReverb, state.reverb);
+        apply(EffectsMenuAction::ToggleSaturation, state.saturation);
+        apply(EffectsMenuAction::ToggleCompression, state.compression);
+        apply(EffectsMenuAction::ToggleChorus, state.chorus);
     }
 }
 

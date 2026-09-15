@@ -806,6 +806,17 @@ int main(int argc, char** argv) {
     audio::Engine engine;
 
 #ifdef __APPLE__
+    // Snapshots every Effects-menu-backed toggle on Engine into the struct
+    // SetEffectsMenuChecked expects - single source of truth used by every
+    // call site below (initial sync, each toggle lambda, tray entry) so
+    // they can't drift out of sync with each other.
+    auto effectsMenuState = [&]() {
+        return app::EffectsMenuState{engine.XSound(), engine.ReverbOn(), engine.SaturationOn(),
+                                      engine.CompressionOn(), engine.ChorusOn()};
+    };
+#endif
+
+#ifdef __APPLE__
     // Enter/exit tray state by hiding/showing windows directly, never by
     // routing Main through a real OS miniaturize (SDL_MinimizeWindow):
     // that was tried first and broke restoring Main specifically (EQ/PL,
@@ -856,7 +867,7 @@ int main(int argc, char** argv) {
         // before the first minimize). Harmless to call every time -
         // just re-applies the same state to items already in sync.
         app::SetUiScaleMenuChecked(uiScalePercent);
-        app::SetEffectsMenuChecked(engine.XSound());
+        app::SetEffectsMenuChecked(effectsMenuState());
         app::SetDockIconVisible(false);
     };
     auto exitAppTray = [&]() {
@@ -963,6 +974,10 @@ int main(int argc, char** argv) {
     if (resumeSession) {
         engine.SetVolume(std::clamp(sessionSettings.volumePercent, 0, 100) / 100.0f);
         engine.SetXSound(sessionSettings.xSound);
+        engine.SetReverbOn(sessionSettings.reverb);
+        engine.SetSaturationOn(sessionSettings.saturation);
+        engine.SetCompressionOn(sessionSettings.compression);
+        engine.SetChorusOn(sessionSettings.chorus);
         // TODO: "EQ mode not saved". Restoring the actual band gains here
         // (not just the preset index, see eqCurrentPreset's init below) is
         // what makes the restored EQ audibly correct even after a manual
@@ -1205,11 +1220,41 @@ int main(int argc, char** argv) {
     auto toggleXSound = [&]() {
         engine.SetXSound(!engine.XSound());
 #ifdef __APPLE__
-        app::SetEffectsMenuChecked(engine.XSound());
+        app::SetEffectsMenuChecked(effectsMenuState());
+#endif
+    };
+    // Mirrors toggleXSound above for each of the other fixed-parameter
+    // Effects-menu toggles - see audio/{reverb,saturation,compressor,
+    // chorus}.h for what each substitutes/implements and why. Menu-only
+    // (no keyboard shortcut, no debug CLI flag): unlike xSound these are
+    // new additions with no prior hotkey to preserve, and DSP correctness
+    // is already covered by their own unit tests.
+    auto toggleReverb = [&]() {
+        engine.SetReverbOn(!engine.ReverbOn());
+#ifdef __APPLE__
+        app::SetEffectsMenuChecked(effectsMenuState());
+#endif
+    };
+    auto toggleSaturation = [&]() {
+        engine.SetSaturationOn(!engine.SaturationOn());
+#ifdef __APPLE__
+        app::SetEffectsMenuChecked(effectsMenuState());
+#endif
+    };
+    auto toggleCompression = [&]() {
+        engine.SetCompressionOn(!engine.CompressionOn());
+#ifdef __APPLE__
+        app::SetEffectsMenuChecked(effectsMenuState());
+#endif
+    };
+    auto toggleChorus = [&]() {
+        engine.SetChorusOn(!engine.ChorusOn());
+#ifdef __APPLE__
+        app::SetEffectsMenuChecked(effectsMenuState());
 #endif
     };
 #ifdef __APPLE__
-    app::SetEffectsMenuChecked(engine.XSound()); // reflect a resumed xSound state immediately
+    app::SetEffectsMenuChecked(effectsMenuState()); // reflect resumed Effects state immediately
 #endif
 
     auto handleUtilityPress = [&](UtilityAction action) {
@@ -3270,10 +3315,14 @@ int main(int argc, char** argv) {
                 case app::UiScaleMenuAction::Reset: applyUiScale(100); break;
             }
         }
-        // Posted by main_menu.mm's Effects-menu xSound item.
+        // Posted by main_menu.mm's Effects-menu items.
         if (ev.type == kEffectsEventType) {
             switch (static_cast<app::EffectsMenuAction>(ev.user.code)) {
                 case app::EffectsMenuAction::ToggleXSound: toggleXSound(); break;
+                case app::EffectsMenuAction::ToggleReverb: toggleReverb(); break;
+                case app::EffectsMenuAction::ToggleSaturation: toggleSaturation(); break;
+                case app::EffectsMenuAction::ToggleCompression: toggleCompression(); break;
+                case app::EffectsMenuAction::ToggleChorus: toggleChorus(); break;
             }
         }
 #else
@@ -3934,6 +3983,10 @@ int main(int argc, char** argv) {
         toSave.currentIndex = std::max(0, playlist.currentIndex());
         toSave.positionSeconds = engine.positionSeconds();
         toSave.xSound = engine.XSound();
+        toSave.reverb = engine.ReverbOn();
+        toSave.saturation = engine.SaturationOn();
+        toSave.compression = engine.CompressionOn();
+        toSave.chorus = engine.ChorusOn();
         toSave.eqPreset = eqCurrentPreset;
         toSave.visPanel = static_cast<int>(visPanel);
         toSave.perSongEq = perSongEqEnabled;

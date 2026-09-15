@@ -16,9 +16,11 @@
 // View: UI scale (100/125/150% radio items plus Zoom In/Out/Reset,
 // mirroring familiar app zoom conventions).
 //
-// Effects: xSound, mirroring the "x" key/mnuXSound toggle (see
-// main.cpp's toggleXSound) - a checkable item rather than radio items,
-// since it's a single on/off flag.
+// Effects: xSound (mirroring the "x" key/mnuXSound toggle - see
+// main.cpp's toggleXSound), plus Reverb/Saturation/Compression/Chorus -
+// all checkable items rather than radio items, since each is an
+// independent on/off flag with fixed internal parameters (no in-menu
+// tuning).
 
 namespace xmad::app {
 
@@ -47,14 +49,28 @@ void SetUiScaleMenuChecked(int currentPercent);
 // menu item fires.
 enum class EffectsMenuAction : int32_t {
     ToggleXSound = 0,
+    ToggleReverb = 1,
+    ToggleSaturation = 2,
+    ToggleCompression = 3,
+    ToggleChorus = 4,
 };
 
 void InstallEffectsMenu(uint32_t effectsEventType);
 
-// Updates the xSound item's checkmark to reflect whether it's currently
-// on - call once after InstallEffectsMenu with the resumed/initial
-// state, and again every time it's toggled (from the menu, the "x" key,
-// or a resumed session).
-void SetEffectsMenuChecked(bool xSoundOn);
+// Bundles all 5 toggle states in one call - avoids an error-prone
+// 5-bool-parameter-order call site now that there's more than just xSound.
+struct EffectsMenuState {
+    bool xSound = false;
+    bool reverb = false;
+    bool saturation = false;
+    bool compression = false;
+    bool chorus = false;
+};
+
+// Updates every effect item's checkmark to reflect its current on/off
+// state - call once after InstallEffectsMenu with the resumed/initial
+// state, and again every time any of them is toggled (from a menu, the
+// "x" key, or a resumed session).
+void SetEffectsMenuChecked(const EffectsMenuState& state);
 
 } // namespace xmad::app
