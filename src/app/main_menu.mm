@@ -1,43 +1,61 @@
 #include "app/main_menu.h"
+#include "menu_internal.h"
 
 #import <Cocoa/Cocoa.h>
 #include <SDL2/SDL.h>
+#include <vector>
 
 // Kept private to this translation unit - main_menu.h stays
 // Objective-C-free so it's safe for main.cpp (plain C++) to include.
-@interface XmadScaleMenuTarget : NSObject
-@property(nonatomic, assign) uint32_t scaleEventType;
-- (void)onScaleAction:(id)sender;
+// Shared by both the View and Effects menus below - it just pushes
+// whatever event type it's configured with, tagged with the clicked
+// item's tag, so a single generic target/action suffices for both. Also
+// reused, via menu_internal.h's builders, by menu_bar_icon.mm's tray
+// popup - a target object can back items in more than one NSMenu at
+// once (only NSMenuItem instances themselves can't be shared).
+@interface XmadMenuActionTarget : NSObject
+@property(nonatomic, assign) uint32_t eventType;
+- (void)onMenuAction:(id)sender;
 @end
 
-@implementation XmadScaleMenuTarget
-- (void)onScaleAction:(id)sender {
+@implementation XmadMenuActionTarget
+- (void)onMenuAction:(id)sender {
     SDL_Event ev;
     SDL_zero(ev);
-    ev.type = self.scaleEventType;
+    ev.type = self.eventType;
     ev.user.code = static_cast<Sint32>([sender tag]);
     SDL_PushEvent(&ev);
 }
 @end
 
 namespace {
-XmadScaleMenuTarget* gTarget = nil;
-NSMenuItem* g100Item = nil;
-NSMenuItem* g125Item = nil;
-NSMenuItem* g150Item = nil;
+XmadMenuActionTarget* gTarget = nil;
+// One entry per built instance of each checkable item (the real menu
+// bar's, and - once ShowMenuBarIcon runs - the tray popup's), so
+// SetUiScaleMenuChecked/SetEffectsMenuChecked below can keep all of
+// them in sync with a single call.
+std::vector<NSMenuItem*> g100Items;
+std::vector<NSMenuItem*> g125Items;
+std::vector<NSMenuItem*> g150Items;
+
+XmadMenuActionTarget* gEffectsTarget = nil;
+std::vector<NSMenuItem*> gXSoundItems;
 } // namespace
 
 namespace xmad::app {
 
-void InstallUiScaleMenu(uint32_t scaleEventType) {
+namespace detail {
+
+NSMenu* BuildViewMenu(uint32_t scaleEventType) {
     @autoreleasepool {
-        if (gTarget) return; // idempotent, same spirit as ShowMenuBarIcon
-        gTarget = [[XmadScaleMenuTarget alloc] init];
-        gTarget.scaleEventType = scaleEventType;
+        if (!gTarget) {
+            gTarget = [[XmadMenuActionTarget alloc] init];
+            gTarget.eventType = scaleEventType;
+        }
 
         auto addItem = [](NSMenu* menu, NSString* title, NSString* key, int tag) {
             NSMenuItem* item = [menu addItemWithTitle:title
-                                                action:@selector(onScaleAction:)
+                                                action:@selector(onMenuAction:)
                                          keyEquivalent:key];
             item.target = gTarget;
             item.tag = tag;
@@ -45,14 +63,49 @@ void InstallUiScaleMenu(uint32_t scaleEventType) {
         };
 
         NSMenu* viewMenu = [[NSMenu alloc] initWithTitle:@"View"];
-        g100Item = addItem(viewMenu, @"100%", @"", static_cast<int>(UiScaleMenuAction::Set100));
-        g125Item = addItem(viewMenu, @"125%", @"", static_cast<int>(UiScaleMenuAction::Set125));
-        g150Item = addItem(viewMenu, @"150%", @"", static_cast<int>(UiScaleMenuAction::Set150));
+        NSMenuItem* i100 = addItem(viewMenu, @"100%", @"", static_cast<int>(UiScaleMenuAction::Set100));
+        NSMenuItem* i125 = addItem(viewMenu, @"125%", @"", static_cast<int>(UiScaleMenuAction::Set125));
+        NSMenuItem* i150 = addItem(viewMenu, @"150%", @"", static_cast<int>(UiScaleMenuAction::Set150));
         [viewMenu addItem:[NSMenuItem separatorItem]];
         addItem(viewMenu, @"Zoom In", @"=", static_cast<int>(UiScaleMenuAction::ZoomIn));
         addItem(viewMenu, @"Zoom Out", @"-", static_cast<int>(UiScaleMenuAction::ZoomOut));
         addItem(viewMenu, @"Reset Zoom", @"0", static_cast<int>(UiScaleMenuAction::Reset));
 
+        g100Items.push_back(i100);
+        g125Items.push_back(i125);
+        g150Items.push_back(i150);
+        return viewMenu;
+    }
+}
+
+NSMenu* BuildEffectsMenu(uint32_t effectsEventType) {
+    @autoreleasepool {
+        if (!gEffectsTarget) {
+            gEffectsTarget = [[XmadMenuActionTarget alloc] init];
+            gEffectsTarget.eventType = effectsEventType;
+        }
+
+        NSMenu* effectsMenu = [[NSMenu alloc] initWithTitle:@"Effects"];
+        NSMenuItem* xSoundItem = [effectsMenu addItemWithTitle:@"xSound"
+                                                          action:@selector(onMenuAction:)
+                                                   keyEquivalent:@""];
+        xSoundItem.target = gEffectsTarget;
+        xSoundItem.tag = static_cast<int>(EffectsMenuAction::ToggleXSound);
+
+        gXSoundItems.push_back(xSoundItem);
+        return effectsMenu;
+    }
+}
+
+} // namespace detail
+
+void InstallUiScaleMenu(uint32_t scaleEventType) {
+    @autoreleasepool {
+        static bool installed = false; // idempotent, same spirit as ShowMenuBarIcon
+        if (installed) return;
+        installed = true;
+
+        NSMenu* viewMenu = detail::BuildViewMenu(scaleEventType);
         NSMenuItem* viewMenuItem = [[NSMenuItem alloc] initWithTitle:@"View" action:nil keyEquivalent:@""];
         viewMenuItem.submenu = viewMenu;
         [[NSApp mainMenu] addItem:viewMenuItem];
@@ -61,10 +114,28 @@ void InstallUiScaleMenu(uint32_t scaleEventType) {
 
 void SetUiScaleMenuChecked(int currentPercent) {
     @autoreleasepool {
-        if (!g100Item) return; // InstallUiScaleMenu not called yet - nothing to update
-        g100Item.state = currentPercent == 100 ? NSControlStateValueOn : NSControlStateValueOff;
-        g125Item.state = currentPercent == 125 ? NSControlStateValueOn : NSControlStateValueOff;
-        g150Item.state = currentPercent == 150 ? NSControlStateValueOn : NSControlStateValueOff;
+        for (NSMenuItem* item : g100Items) item.state = currentPercent == 100 ? NSControlStateValueOn : NSControlStateValueOff;
+        for (NSMenuItem* item : g125Items) item.state = currentPercent == 125 ? NSControlStateValueOn : NSControlStateValueOff;
+        for (NSMenuItem* item : g150Items) item.state = currentPercent == 150 ? NSControlStateValueOn : NSControlStateValueOff;
+    }
+}
+
+void InstallEffectsMenu(uint32_t effectsEventType) {
+    @autoreleasepool {
+        static bool installed = false; // idempotent, same spirit as InstallUiScaleMenu
+        if (installed) return;
+        installed = true;
+
+        NSMenu* effectsMenu = detail::BuildEffectsMenu(effectsEventType);
+        NSMenuItem* effectsMenuItem = [[NSMenuItem alloc] initWithTitle:@"Effects" action:nil keyEquivalent:@""];
+        effectsMenuItem.submenu = effectsMenu;
+        [[NSApp mainMenu] addItem:effectsMenuItem];
+    }
+}
+
+void SetEffectsMenuChecked(bool xSoundOn) {
+    @autoreleasepool {
+        for (NSMenuItem* item : gXSoundItems) item.state = xSoundOn ? NSControlStateValueOn : NSControlStateValueOff;
     }
 }
 

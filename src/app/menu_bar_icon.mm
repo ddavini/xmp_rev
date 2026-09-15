@@ -1,4 +1,5 @@
 #include "app/menu_bar_icon.h"
+#include "menu_internal.h"
 
 #import <Cocoa/Cocoa.h>
 #include <SDL2/SDL.h>
@@ -7,16 +8,43 @@
 // Objective-C-free so it's safe for main.cpp (plain C++) to include.
 @interface XmadMenuBarTarget : NSObject
 @property(nonatomic, assign) uint32_t restoreEventType;
+@property(nonatomic, assign) uint32_t aboutEventType;
+@property(nonatomic, strong) NSMenu* popupMenu;
 - (void)onClick:(id)sender;
+- (void)onAboutClick:(id)sender;
 @end
 
 @implementation XmadMenuBarTarget
 - (void)onClick:(id)sender {
+    // Right-click: show the View/Effects/About popup instead of
+    // restoring - left-click (and anything else) keeps the original
+    // restore behavior below. sendActionOn: (see ShowMenuBarIcon) is
+    // what makes this handler fire for a right-click at all.
+    if ([NSApp currentEvent].type == NSEventTypeRightMouseUp) {
+        [NSMenu popUpContextMenu:self.popupMenu withEvent:[NSApp currentEvent] forView:(NSView*)sender];
+        return;
+    }
     // A dedicated custom event type, not a real SDL window event - see
     // menu_bar_icon.h's comment on ShowMenuBarIcon for why.
     SDL_Event ev;
     SDL_zero(ev);
     ev.type = self.restoreEventType;
+    SDL_PushEvent(&ev);
+}
+- (void)onAboutClick:(id)sender {
+    SDL_Event ev;
+    SDL_zero(ev);
+    ev.type = self.aboutEventType;
+    SDL_PushEvent(&ev);
+}
+- (void)onQuitClick:(id)sender {
+    // A real SDL_QUIT, not a custom bridged event type - processEvent's
+    // very first check (`if (ev.type == SDL_QUIT) running = false;`)
+    // already handles this exactly like Cmd+Q/the real Quit menu item
+    // do, so there's nothing app-specific to route here.
+    SDL_Event ev;
+    SDL_zero(ev);
+    ev.type = SDL_QUIT;
     SDL_PushEvent(&ev);
 }
 @end
@@ -28,11 +56,29 @@ XmadMenuBarTarget* gTarget = nil;
 
 namespace xmad::app {
 
-void ShowMenuBarIcon(uint32_t restoreEventType) {
+void ShowMenuBarIcon(uint32_t restoreEventType, uint32_t scaleEventType, uint32_t effectsEventType,
+                      uint32_t aboutEventType) {
     @autoreleasepool {
         if (gStatusItem) return;
         gTarget = [[XmadMenuBarTarget alloc] init];
         gTarget.restoreEventType = restoreEventType;
+        gTarget.aboutEventType = aboutEventType;
+
+        NSMenu* popupMenu = [[NSMenu alloc] init];
+        NSMenuItem* viewItem = [[NSMenuItem alloc] initWithTitle:@"View" action:nil keyEquivalent:@""];
+        viewItem.submenu = detail::BuildViewMenu(scaleEventType);
+        [popupMenu addItem:viewItem];
+        NSMenuItem* effectsItem = [[NSMenuItem alloc] initWithTitle:@"Effects" action:nil keyEquivalent:@""];
+        effectsItem.submenu = detail::BuildEffectsMenu(effectsEventType);
+        [popupMenu addItem:effectsItem];
+        NSMenuItem* quitItem = [popupMenu addItemWithTitle:@"Quit" action:@selector(onQuitClick:) keyEquivalent:@""];
+        quitItem.target = gTarget;
+        [popupMenu addItem:[NSMenuItem separatorItem]];
+        NSMenuItem* aboutItem = [popupMenu addItemWithTitle:@"About"
+                                                       action:@selector(onAboutClick:)
+                                                keyEquivalent:@""];
+        aboutItem.target = gTarget;
+        gTarget.popupMenu = popupMenu;
 
         gStatusItem = [[NSStatusBar systemStatusBar] statusItemWithLength:NSVariableStatusItemLength];
         // Title set unconditionally, not just as an icon-load fallback:
@@ -52,6 +98,10 @@ void ShowMenuBarIcon(uint32_t restoreEventType) {
         }
         gStatusItem.button.target = gTarget;
         gStatusItem.button.action = @selector(onClick:);
+        // Default status-item button behavior only sends the action for
+        // a left click; add right-click so onClick: above can branch on
+        // it to show the popup menu instead of restoring.
+        [gStatusItem.button sendActionOn:(NSEventMaskLeftMouseUp | NSEventMaskRightMouseUp)];
     }
 }
 
@@ -61,6 +111,16 @@ void HideMenuBarIcon() {
         [[NSStatusBar systemStatusBar] removeStatusItem:gStatusItem];
         gStatusItem = nil;
         gTarget = nil;
+    }
+}
+
+void ActivateApp() {
+    @autoreleasepool {
+        // Same reasoning as SetDockIconVisible's activate call below, but
+        // without touching the Dock icon/activation policy - for showing
+        // a single window (e.g. About from the tray popup) on top of an
+        // otherwise still-minimized app, rather than a full restore.
+        [NSApp activateIgnoringOtherApps:YES];
     }
 }
 

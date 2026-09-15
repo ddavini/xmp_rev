@@ -531,6 +531,12 @@ int main(int argc, char** argv) {
     // the app to immediately undo its own minimize.
     const Uint32 kTrayRestoreEventType = SDL_RegisterEvents(1);
 
+    // Same bridging pattern as kTrayRestoreEventType above - pushed by
+    // the tray icon's right-click popup's "About" item (see
+    // ShowMenuBarIcon), handled in processEvent below by restoring the
+    // app and showing the About window specifically.
+    const Uint32 kTrayAboutEventType = SDL_RegisterEvents(1);
+
     // Bluetooth headphones/AirPods/car-stereo play-pause-next-previous
     // presses arrive as MPRemoteCommandCenter callbacks (media_remote.mm),
     // which fire on whatever thread/queue the system chooses - bridged
@@ -546,6 +552,12 @@ int main(int argc, char** argv) {
     // than a from-scratch menu bar.
     const Uint32 kUiScaleEventType = SDL_RegisterEvents(1);
     app::InstallUiScaleMenu(kUiScaleEventType);
+
+    // Effects menu (currently just xSound) - same bridging pattern as
+    // the View menu above; consumed in processEvent below via
+    // toggleXSound.
+    const Uint32 kEffectsEventType = SDL_RegisterEvents(1);
+    app::InstallEffectsMenu(kEffectsEventType);
 #endif
 
     // TODO: "Add a setting for UI scale / text+button size" - loaded here,
@@ -736,78 +748,6 @@ int main(int argc, char** argv) {
     // this bool at the two call sites below rather than on any per-window
     // state.
     bool appHiddenToTray = false;
-
-    // Enter/exit tray state by hiding/showing windows directly, never by
-    // routing Main through a real OS miniaturize (SDL_MinimizeWindow):
-    // that was tried first and broke restoring Main specifically (EQ/PL,
-    // which were only ever plain-hidden, restored fine; Main, which had
-    // actually been miniaturized by the click handler before this code
-    // forced it hidden out from under that state, then didn't reliably
-    // come back via SDL_ShowWindow - SDL's Cocoa backend tracks
-    // miniaturized-vs-hidden internally via NSWindow delegate callbacks,
-    // and calling orderOut: on an already-miniaturized window doesn't
-    // fire windowDidDeminiaturize:, leaving that bookkeeping stale).
-    // Called directly from the minimize button's click handler (bypassing
-    // SDL_MinimizeWindow/the MINIMIZED event entirely for the normal
-    // path) and from the menu-bar icon's synthetic restore event.
-    auto enterAppTray = [&]() {
-        if (appHiddenToTray) return;
-        appHiddenToTray = true;
-        mainMinimized = true;
-        SDL_HideWindow(window);
-        if (eqUserVisible) {
-            eqMinimized = true;
-            SDL_HideWindow(eqWindow);
-        }
-        if (plUserVisible) {
-            plMinimized = true;
-            SDL_HideWindow(plWindow);
-        }
-        if (infoUserVisible) {
-            infoMinimized = true;
-            SDL_HideWindow(infoWindow);
-        }
-        if (aboutUserVisible) {
-            aboutMinimized = true;
-            SDL_HideWindow(aboutWindow);
-        }
-        // Add the new access point before removing the old one, so
-        // there's never a moment with neither a Dock icon nor a
-        // menu-bar icon available to click.
-        app::ShowMenuBarIcon(kTrayRestoreEventType);
-        app::SetDockIconVisible(false);
-    };
-    auto exitAppTray = [&]() {
-        if (!appHiddenToTray) return;
-        appHiddenToTray = false;
-        // Reactivate *before* showing/raising anything below: an
-        // Accessory-policy app isn't guaranteed to come to the
-        // foreground just because a window gets ordered front.
-        app::SetDockIconVisible(true);
-        // Fixed order (About, Info, Playlist, EQ, then Main last) -
-        // matches the pre-existing restore-order convention elsewhere in
-        // this file so the resulting window stacking looks the same.
-        if (aboutMinimized) {
-            aboutMinimized = false;
-            SDL_ShowWindow(aboutWindow);
-        }
-        if (infoMinimized) {
-            infoMinimized = false;
-            SDL_ShowWindow(infoWindow);
-        }
-        if (plMinimized) {
-            plMinimized = false;
-            SDL_ShowWindow(plWindow);
-        }
-        if (eqMinimized) {
-            eqMinimized = false;
-            SDL_ShowWindow(eqWindow);
-        }
-        mainMinimized = false;
-        SDL_ShowWindow(window);
-        SDL_RaiseWindow(window);
-        app::HideMenuBarIcon();
-    };
 #endif
 
     // Shared by the PL/EQ toggle buttons on Main and by the Info button
@@ -864,6 +804,94 @@ int main(int argc, char** argv) {
     gfx::BitmapFont font(skin.displayFont);
 
     audio::Engine engine;
+
+#ifdef __APPLE__
+    // Enter/exit tray state by hiding/showing windows directly, never by
+    // routing Main through a real OS miniaturize (SDL_MinimizeWindow):
+    // that was tried first and broke restoring Main specifically (EQ/PL,
+    // which were only ever plain-hidden, restored fine; Main, which had
+    // actually been miniaturized by the click handler before this code
+    // forced it hidden out from under that state, then didn't reliably
+    // come back via SDL_ShowWindow - SDL's Cocoa backend tracks
+    // miniaturized-vs-hidden internally via NSWindow delegate callbacks,
+    // and calling orderOut: on an already-miniaturized window doesn't
+    // fire windowDidDeminiaturize:, leaving that bookkeeping stale).
+    // Called directly from the minimize button's click handler (bypassing
+    // SDL_MinimizeWindow/the MINIMIZED event entirely for the normal
+    // path) and from the menu-bar icon's synthetic restore event.
+    // Defined here (needs `engine`, declared just above, for the xSound
+    // checkmark sync below) rather than alongside appHiddenToTray up
+    // with the rest of this state.
+    auto enterAppTray = [&]() {
+        if (appHiddenToTray) return;
+        appHiddenToTray = true;
+        mainMinimized = true;
+        SDL_HideWindow(window);
+        if (eqUserVisible) {
+            eqMinimized = true;
+            SDL_HideWindow(eqWindow);
+        }
+        if (plUserVisible) {
+            plMinimized = true;
+            SDL_HideWindow(plWindow);
+        }
+        if (infoUserVisible) {
+            infoMinimized = true;
+            SDL_HideWindow(infoWindow);
+        }
+        if (aboutUserVisible) {
+            aboutMinimized = true;
+            SDL_HideWindow(aboutWindow);
+        }
+        // Add the new access point before removing the old one, so
+        // there's never a moment with neither a Dock icon nor a
+        // menu-bar icon available to click.
+        app::ShowMenuBarIcon(kTrayRestoreEventType, kUiScaleEventType, kEffectsEventType, kTrayAboutEventType);
+        // ShowMenuBarIcon is idempotent (a no-op past the first call),
+        // so it only actually builds the tray popup's own View/Effects
+        // items the first time the app is ever minimized in this run -
+        // freshly built items default to unchecked, so without this
+        // they'd stay wrong forever if the scale/xSound state at that
+        // moment wasn't the default (e.g. xSound already toggled on
+        // before the first minimize). Harmless to call every time -
+        // just re-applies the same state to items already in sync.
+        app::SetUiScaleMenuChecked(uiScalePercent);
+        app::SetEffectsMenuChecked(engine.XSound());
+        app::SetDockIconVisible(false);
+    };
+    auto exitAppTray = [&]() {
+        if (!appHiddenToTray) return;
+        appHiddenToTray = false;
+        // Reactivate *before* showing/raising anything below: an
+        // Accessory-policy app isn't guaranteed to come to the
+        // foreground just because a window gets ordered front.
+        app::SetDockIconVisible(true);
+        // Fixed order (About, Info, Playlist, EQ, then Main last) -
+        // matches the pre-existing restore-order convention elsewhere in
+        // this file so the resulting window stacking looks the same.
+        if (aboutMinimized) {
+            aboutMinimized = false;
+            SDL_ShowWindow(aboutWindow);
+        }
+        if (infoMinimized) {
+            infoMinimized = false;
+            SDL_ShowWindow(infoWindow);
+        }
+        if (plMinimized) {
+            plMinimized = false;
+            SDL_ShowWindow(plWindow);
+        }
+        if (eqMinimized) {
+            eqMinimized = false;
+            SDL_ShowWindow(eqWindow);
+        }
+        mainMinimized = false;
+        SDL_ShowWindow(window);
+        SDL_RaiseWindow(window);
+        app::HideMenuBarIcon();
+    };
+#endif
+
     app::Playlist playlist;
 
     // Session persistence (TODO: "save settings on exit"). Resuming last
@@ -1166,15 +1194,23 @@ int main(int argc, char** argv) {
     // modxmMP3Interface.bas) enables its "Surround" DSP flag - a separate
     // "Normalize"/Level feature also lives behind XSound in the original
     // but isn't part of this toggle there either, so it's out of scope
-    // here too. There's no menu system here, so it's bound to the same
-    // "x" key the original's global hotkey used (hotkeys.bas, Case
-    // Asc("x")) - window-focused rather than system-wide, the same
-    // simplification Escape-to-quit already makes. The actual audio
-    // effect lives on Engine (SetXSound/XSound - see
+    // here too. Bound to the same "x" key the original's global hotkey
+    // used (hotkeys.bas, Case Asc("x")) - window-focused rather than
+    // system-wide, the same simplification Escape-to-quit already makes
+    // - and, on macOS, to the Effects menu's xSound item (main_menu.h).
+    // The actual audio effect lives on Engine (SetXSound/XSound - see
     // audio/stereo_widen.h for what it substitutes and why); this just
     // toggles it, so `engine.XSound()` is the single source of truth
     // rather than a separate local flag.
-    auto toggleXSound = [&]() { engine.SetXSound(!engine.XSound()); };
+    auto toggleXSound = [&]() {
+        engine.SetXSound(!engine.XSound());
+#ifdef __APPLE__
+        app::SetEffectsMenuChecked(engine.XSound());
+#endif
+    };
+#ifdef __APPLE__
+    app::SetEffectsMenuChecked(engine.XSound()); // reflect a resumed xSound state immediately
+#endif
 
     auto handleUtilityPress = [&](UtilityAction action) {
         // Matches CommandImg(9).Enabled = analyzer.Visible - the SpecMode
@@ -3190,6 +3226,20 @@ int main(int argc, char** argv) {
         if (ev.type == kTrayRestoreEventType) {
             exitAppTray();
         }
+        // Posted by the tray popup's "About" item (menu_bar_icon.mm).
+        // Deliberately does NOT call exitAppTray() - shows only the
+        // About window, leaving Main/EQ/Playlist/Info and the tray icon
+        // exactly as they were; unconditional (not toggleSecondaryWindow)
+        // since aboutUserVisible can already be true here (it isn't
+        // cleared by enterAppTray(), only the real window gets hidden),
+        // and this item should always end up showing it, never hiding it.
+        if (ev.type == kTrayAboutEventType) {
+            app::ActivateApp();
+            aboutUserVisible = true;
+            aboutMinimized = false;
+            SDL_ShowWindow(aboutWindow);
+            SDL_RaiseWindow(aboutWindow);
+        }
         // Posted by media_remote.mm's MPRemoteCommandCenter handlers -
         // Bluetooth headphones/AirPods/car-stereo play-pause-next-previous
         // presses. Previous maps to Back, matching the Play/Stop/Next/
@@ -3218,6 +3268,12 @@ int main(int argc, char** argv) {
                 case app::UiScaleMenuAction::ZoomIn: applyUiScale(kLevels[std::min(idx + 1, 2)]); break;
                 case app::UiScaleMenuAction::ZoomOut: applyUiScale(kLevels[std::max(idx - 1, 0)]); break;
                 case app::UiScaleMenuAction::Reset: applyUiScale(100); break;
+            }
+        }
+        // Posted by main_menu.mm's Effects-menu xSound item.
+        if (ev.type == kEffectsEventType) {
+            switch (static_cast<app::EffectsMenuAction>(ev.user.code)) {
+                case app::EffectsMenuAction::ToggleXSound: toggleXSound(); break;
             }
         }
 #else
