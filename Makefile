@@ -132,7 +132,7 @@ ifeq ($(UNAME_S),Darwin)
 # BASE_VERSION is hand-bumped for real milestones; the trailing component is
 # the git commit count, so the same commit always produces the same version
 # number no matter who builds it - no local counter file to keep in sync.
-BASE_VERSION := 1.0
+BASE_VERSION := 1.1
 APP_VERSION := $(BASE_VERSION).$(shell git rev-list --count HEAD 2>/dev/null || echo 0)
 APP_BUNDLE := $(BUILD)/xmad.app
 
