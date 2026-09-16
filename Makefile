@@ -184,6 +184,7 @@ $(APP_BUNDLE): $(BUILD)/xmad assets/icon/Info.plist assets/icon/AppIcon.icns $(w
 	@mkdir -p "$(APP_BUNDLE)/Contents/MacOS" "$(APP_BUNDLE)/Contents/Resources" "$(APP_BUNDLE)/Contents/Frameworks"
 	cp $(BUILD)/xmad "$(APP_BUNDLE)/Contents/MacOS/xmad"
 	sdl2_dylib=$$(otool -L "$(APP_BUNDLE)/Contents/MacOS/xmad" | awk '/libSDL2-2\.0\.0\.dylib/ {print $$1; exit}') && \
+	rm -f "$(APP_BUNDLE)/Contents/Frameworks/libSDL2-2.0.0.dylib" && \
 	cp -L "$$sdl2_dylib" "$(APP_BUNDLE)/Contents/Frameworks/libSDL2-2.0.0.dylib" && \
 	install_name_tool -id "@executable_path/../Frameworks/libSDL2-2.0.0.dylib" "$(APP_BUNDLE)/Contents/Frameworks/libSDL2-2.0.0.dylib" && \
 	install_name_tool -change "$$sdl2_dylib" "@executable_path/../Frameworks/libSDL2-2.0.0.dylib" "$(APP_BUNDLE)/Contents/MacOS/xmad"
