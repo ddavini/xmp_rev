@@ -15,8 +15,7 @@
 // *where* it resumes from changed, via positionSeconds below.
 // Deliberately narrower than the original's xmp.ini
 // (Source/FunzioniGlobali.bas's GestisciPosFrm): no window position,
-// Repeat/Random (not implemented yet), ShowTask, etc - those weren't
-// asked for.
+// ShowTask, etc - those weren't asked for.
 
 namespace xmad::app {
 
@@ -39,6 +38,13 @@ struct Settings {
     bool saturation = false;  // Engine::SaturationOn()
     bool compression = false; // Engine::CompressionOn()
     bool chorus = false;      // Engine::ChorusOn()
+    // TODO: "Repeat / Shuffle (Random) playback modes". Mirrors the
+    // original's g_Ripeti/Acaso (Loop/Random) - see
+    // app::NextAutoAdvanceIndex for how they're actually consulted at
+    // end-of-track. Not gated on any Engine state (there's no audio
+    // effect involved), just plain UI-level playback flags.
+    bool repeat = false;
+    bool random = false;
     // TODO: "EQ mode not saved". eqPreset mirrors main.cpp's
     // eqCurrentPreset (-1 = none/manual, matching Form_Load never
     // checking a radio button in the original); eqBands are the actual

@@ -24,6 +24,8 @@ std::string SerializeSettings(const Settings& s) {
     out << "SATURATION=" << (s.saturation ? 1 : 0) << "\n";
     out << "COMPRESSION=" << (s.compression ? 1 : 0) << "\n";
     out << "CHORUS=" << (s.chorus ? 1 : 0) << "\n";
+    out << "REPEAT=" << (s.repeat ? 1 : 0) << "\n";
+    out << "RANDOM=" << (s.random ? 1 : 0) << "\n";
     out << "EQPRESET=" << s.eqPreset << "\n";
     out << "EQBANDS=";
     for (size_t i = 0; i < s.eqBands.size(); ++i) {
@@ -59,6 +61,8 @@ bool ParseSettings(const std::string& text, Settings& out) {
             else if (key == "SATURATION") out.saturation = std::stoi(value) != 0;
             else if (key == "COMPRESSION") out.compression = std::stoi(value) != 0;
             else if (key == "CHORUS") out.chorus = std::stoi(value) != 0;
+            else if (key == "REPEAT") out.repeat = std::stoi(value) != 0;
+            else if (key == "RANDOM") out.random = std::stoi(value) != 0;
             else if (key == "VISPANEL") out.visPanel = std::stoi(value);
             else if (key == "EQPRESET") out.eqPreset = std::stoi(value);
             else if (key == "PERSONGEQ") out.perSongEq = std::stoi(value) != 0;

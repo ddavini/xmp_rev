@@ -101,6 +101,26 @@ constexpr int kEffectsMenuH = kEffectsMenuItemH * kEffectsMenuItems;
 constexpr int kEffectsMenuX = kEffectsToggleX;
 constexpr int kEffectsMenuY = kEffectsToggleY - kEffectsMenuH;
 
+// The former "FX" toggle now opens a two-level "Options" menu (matching
+// the real macOS menu bar's Options>{Effects,Playback} structure - see
+// app/main_menu.h) instead of jumping straight to the Effects list: a
+// top-level 2-row picker ("EFFECTS"/"PLAYBACK") drills into either the
+// existing 5-row Effects list above (unchanged position/size) or this
+// new 2-row Playback list. kEffectsToggleX/Y/W/H stays the on-screen
+// button's rect (just relabeled "FX"->"OP" at its drawToggle call site).
+constexpr int kOptionsMenuItemH = 12;
+constexpr int kOptionsMenuTopItems = 2; // Effects, Playback
+constexpr int kOptionsMenuTopW = 64;
+constexpr int kOptionsMenuTopH = kOptionsMenuItemH * kOptionsMenuTopItems;
+constexpr int kOptionsMenuTopX = kEffectsToggleX;
+constexpr int kOptionsMenuTopY = kEffectsToggleY - kOptionsMenuTopH;
+
+constexpr int kPlaybackMenuItems = 2; // Repeat, Random
+constexpr int kPlaybackMenuW = kEffectsMenuW;
+constexpr int kPlaybackMenuH = kOptionsMenuItemH * kPlaybackMenuItems;
+constexpr int kPlaybackMenuX = kEffectsToggleX;
+constexpr int kPlaybackMenuY = kEffectsToggleY - kPlaybackMenuH;
+
 // xmDisplay(0)/(1): title marquee and status line.
 constexpr int kMarqueeX = 16, kMarqueeY = 26, kDisplayFieldW = 278;
 constexpr int kStatusX = 16, kStatusY = 35;

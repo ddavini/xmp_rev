@@ -16,11 +16,20 @@
 // View: UI scale (100/200/300/400% radio items plus Zoom In/Out/Reset,
 // mirroring familiar app zoom conventions).
 //
-// Effects: xSound (mirroring the "x" key/mnuXSound toggle - see
-// main.cpp's toggleXSound), plus Reverb/Saturation/Compression/Chorus -
-// all checkable items rather than radio items, since each is an
-// independent on/off flag with fixed internal parameters (no in-menu
-// tuning).
+// Options: a top-level menu (matching the original's real "Option" menu
+// name - Source/Menu.frm's mnuXmPButton "Option") holding two submenus:
+//
+//   Effects: xSound (mirroring the "x" key/mnuXSound toggle - see
+//   main.cpp's toggleXSound), plus Reverb/Saturation/Compression/Chorus -
+//   all checkable items rather than radio items, since each is an
+//   independent on/off flag with fixed internal parameters (no in-menu
+//   tuning).
+//
+//   Playback: Repeat/Random, mirroring the original's own mnuLoop/mnuRnd
+//   (which lived directly under that same "Option" menu, not a further
+//   submenu there - grouping them under "Playback" here is this port's
+//   own organizational choice, not a literal port of the original's flat
+//   menu layout).
 
 namespace xmad::app {
 
@@ -56,7 +65,13 @@ enum class EffectsMenuAction : int32_t {
     ToggleChorus = 4,
 };
 
-void InstallEffectsMenu(uint32_t effectsEventType);
+// Installs the top-level "Options" menu (Effects + Playback submenus) in
+// one call - replaces the old InstallEffectsMenu, which added "Effects"
+// directly to the menu bar; effectsEventType/playbackEventType are each
+// an SDL_RegisterEvents-allocated code, same bridging pattern as
+// scaleEventType above, one per submenu since they dispatch different
+// action enums.
+void InstallOptionsMenu(uint32_t effectsEventType, uint32_t playbackEventType);
 
 // Bundles all 5 toggle states in one call - avoids an error-prone
 // 5-bool-parameter-order call site now that there's more than just xSound.
@@ -69,9 +84,27 @@ struct EffectsMenuState {
 };
 
 // Updates every effect item's checkmark to reflect its current on/off
-// state - call once after InstallEffectsMenu with the resumed/initial
+// state - call once after InstallOptionsMenu with the resumed/initial
 // state, and again every time any of them is toggled (from a menu, the
 // "x" key, or a resumed session).
 void SetEffectsMenuChecked(const EffectsMenuState& state);
+
+// playbackEventType: same bridging pattern as effectsEventType above.
+enum class PlaybackMenuAction : int32_t {
+    ToggleRepeat = 0,
+    ToggleRandom = 1,
+};
+
+// Bundles both Playback toggle states in one call, same reasoning as
+// EffectsMenuState above.
+struct PlaybackMenuState {
+    bool repeat = false;
+    bool random = false;
+};
+
+// Updates the Repeat/Random items' checkmarks - call once after
+// InstallOptionsMenu with the resumed/initial state, and again every time
+// either is toggled (from a menu or a resumed session).
+void SetPlaybackMenuChecked(const PlaybackMenuState& state);
 
 } // namespace xmad::app

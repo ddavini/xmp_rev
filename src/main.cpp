@@ -31,6 +31,7 @@
 #include "app/main_menu.h"
 #include "app/media_remote.h"
 #include "app/menu_bar_icon.h"
+#include "app/playback_mode.h"
 #endif
 #include "app/playlist.h"
 #include "app/session.h"
@@ -613,11 +614,13 @@ int main(int argc, char** argv) {
     const Uint32 kUiScaleEventType = SDL_RegisterEvents(1);
     app::InstallUiScaleMenu(kUiScaleEventType);
 
-    // Effects menu (currently just xSound) - same bridging pattern as
-    // the View menu above; consumed in processEvent below via
-    // toggleXSound.
+    // Options menu (Effects + Playback submenus) - same bridging pattern
+    // as the View menu above; each submenu gets its own event type since
+    // they dispatch different action enums. Consumed in processEvent
+    // below via toggleXSound/etc. and toggleRepeat/toggleRandom.
     const Uint32 kEffectsEventType = SDL_RegisterEvents(1);
-    app::InstallEffectsMenu(kEffectsEventType);
+    const Uint32 kPlaybackEventType = SDL_RegisterEvents(1);
+    app::InstallOptionsMenu(kEffectsEventType, kPlaybackEventType);
 #endif
 
     // TODO: "Add a setting for UI scale / text+button size" - loaded here,
@@ -907,6 +910,21 @@ int main(int argc, char** argv) {
     };
 #endif
 
+    // Repeat/Random playback modes - mirrors the original's g_Ripeti/Acaso.
+    // Plain flags (not gated on Engine - there's no audio effect here),
+    // used on both platforms: the auto-advance edge-check below, session
+    // resume/save, and the Options>Playback menu (native on macOS, an
+    // in-app dropdown on Linux - see the Options/Effects/Playback state
+    // machine further down). shuffleBagState is Random's "already played
+    // this cycle" bag - see app::NextAutoAdvanceIndex.
+    bool repeatEnabled = false;
+    bool randomEnabled = false;
+    app::ShuffleState shuffleBagState;
+#ifdef __APPLE__
+    // Same reasoning as effectsMenuState above, for the Playback submenu.
+    auto playbackMenuState = [&]() { return app::PlaybackMenuState{repeatEnabled, randomEnabled}; };
+#endif
+
 #ifdef __APPLE__
     // Enter/exit tray state by hiding/showing windows directly, never by
     // routing Main through a real OS miniaturize (SDL_MinimizeWindow):
@@ -948,10 +966,11 @@ int main(int argc, char** argv) {
         // Add the new access point before removing the old one, so
         // there's never a moment with neither a Dock icon nor a
         // menu-bar icon available to click.
-        app::ShowMenuBarIcon(kTrayRestoreEventType, kUiScaleEventType, kEffectsEventType, kTrayAboutEventType);
+        app::ShowMenuBarIcon(kTrayRestoreEventType, kUiScaleEventType, kEffectsEventType, kPlaybackEventType,
+                             kTrayAboutEventType);
         // ShowMenuBarIcon is idempotent (a no-op past the first call),
-        // so it only actually builds the tray popup's own View/Effects
-        // items the first time the app is ever minimized in this run -
+        // so it only actually builds the tray popup's own View/Effects/
+        // Playback items the first time the app is ever minimized in this run -
         // freshly built items default to unchecked, so without this
         // they'd stay wrong forever if the scale/xSound state at that
         // moment wasn't the default (e.g. xSound already toggled on
@@ -959,6 +978,7 @@ int main(int argc, char** argv) {
         // just re-applies the same state to items already in sync.
         app::SetUiScaleMenuChecked(uiScalePercent);
         app::SetEffectsMenuChecked(effectsMenuState());
+        app::SetPlaybackMenuChecked(playbackMenuState());
         app::SetDockIconVisible(false);
     };
     auto exitAppTray = [&]() {
@@ -1019,7 +1039,8 @@ int main(int argc, char** argv) {
                       << " wasPaused=" << sessionSettings.wasPaused << " index=" << sessionSettings.currentIndex
                       << " positionSeconds=" << sessionSettings.positionSeconds
                       << " xSound=" << sessionSettings.xSound << " eqPreset=" << sessionSettings.eqPreset
-                      << " visPanel=" << sessionSettings.visPanel << " playlistSize=" << playlist.size() << "\n";
+                      << " visPanel=" << sessionSettings.visPanel << " repeat=" << sessionSettings.repeat
+                      << " random=" << sessionSettings.random << " playlistSize=" << playlist.size() << "\n";
         }
     }
 
@@ -1069,6 +1090,9 @@ int main(int argc, char** argv) {
         engine.SetSaturationOn(sessionSettings.saturation);
         engine.SetCompressionOn(sessionSettings.compression);
         engine.SetChorusOn(sessionSettings.chorus);
+        repeatEnabled = sessionSettings.repeat;
+        randomEnabled = sessionSettings.random;
+        if (randomEnabled) app::ResetShuffleBag(shuffleBagState, playlist.size(), playlist.Generation());
         // TODO: "EQ mode not saved". Restoring the actual band gains here
         // (not just the preset index, see eqCurrentPreset's init below) is
         // what makes the restored EQ audibly correct even after a manual
@@ -1348,6 +1372,26 @@ int main(int argc, char** argv) {
     app::SetEffectsMenuChecked(effectsMenuState()); // reflect resumed Effects state immediately
 #endif
 
+    // Repeat/Random - same shared-lambda shape as the Effects toggles
+    // above, used by both the Linux in-app Playback dropdown and the
+    // macOS native Options>Playback menu.
+    auto toggleRepeat = [&]() {
+        repeatEnabled = !repeatEnabled;
+#ifdef __APPLE__
+        app::SetPlaybackMenuChecked(playbackMenuState());
+#endif
+    };
+    auto toggleRandom = [&]() {
+        randomEnabled = !randomEnabled;
+        if (randomEnabled) app::ResetShuffleBag(shuffleBagState, playlist.size(), playlist.Generation());
+#ifdef __APPLE__
+        app::SetPlaybackMenuChecked(playbackMenuState());
+#endif
+    };
+#ifdef __APPLE__
+    app::SetPlaybackMenuChecked(playbackMenuState()); // reflect resumed Playback state immediately
+#endif
+
     auto handleUtilityPress = [&](UtilityAction action) {
         // Matches CommandImg(9).Enabled = analyzer.Visible - the SpecMode
         // button only cycles the analyzer's own 6 sub-modes while the
@@ -1441,12 +1485,17 @@ int main(int argc, char** argv) {
     // (plSaveMenuOpen) one level up, in the main window instead.
     bool ejectMenuOpen = false;
 #ifndef __APPLE__
-    // Linux has no native menu bar (macOS gets its View/Effects menus from
+    // Linux has no native menu bar (macOS gets its View/Options menus from
     // app/main_menu.h's NSMenu bridging - see the #ifdef __APPLE__ blocks
     // below) - these back the in-window dropdown twins instead, same
     // mutual-exclusion convention as ejectMenuOpen/plSaveMenuOpen.
     bool viewMenuOpen = false;
-    bool effectsMenuOpen = false;
+    // The former flat "Effects" dropdown is now a two-level "Options"
+    // menu (Top: EFFECTS/PLAYBACK -> drills into either's own list),
+    // mirroring the real macOS menu bar's Options>{Effects,Playback}
+    // structure - see layout.h's kOptionsMenuTop*/kPlaybackMenu* comment.
+    enum class OptionsMenuLevel { Closed, Top, Effects, Playback };
+    OptionsMenuLevel optionsMenuLevel = OptionsMenuLevel::Closed;
 #endif
 
     // Distinguishes "user pressed Stop" from "track finished naturally" -
@@ -1513,7 +1562,7 @@ int main(int argc, char** argv) {
                 ejectMenuOpen = !ejectMenuOpen;
 #ifndef __APPLE__
                 viewMenuOpen = false;
-                effectsMenuOpen = false;
+                optionsMenuLevel = OptionsMenuLevel::Closed;
 #endif
                 break;
         }
@@ -1621,6 +1670,8 @@ int main(int argc, char** argv) {
     CachedTextTexture viewToggleTextCache, effectsToggleTextCache;
     std::array<CachedTextTexture, kViewMenuItems> viewMenuTextCache;
     std::array<CachedTextTexture, kEffectsMenuItems> effectsMenuTextCache;
+    std::array<CachedTextTexture, kOptionsMenuTopItems> optionsMenuTopTextCache;
+    std::array<CachedTextTexture, kPlaybackMenuItems> playbackMenuTextCache;
 #endif
 
     auto drawFrame = [&]() {
@@ -1666,12 +1717,16 @@ int main(int argc, char** argv) {
             drawToggle(kPlToggleX, kPlToggleY, kPlToggleW, kPlToggleH, "PL", plUserVisible, plToggleTextCache);
             drawToggle(kEqToggleX, kEqToggleY, kEqToggleW, kEqToggleH, "EQ", eqUserVisible, eqToggleTextCache);
 #ifndef __APPLE__
-            // View/Effects dropdown triggers - macOS gets real NSMenu items
-            // instead (app/main_menu.h), so these only exist here.
+            // View/Options dropdown triggers - macOS gets real NSMenu items
+            // instead (app/main_menu.h), so these only exist here. "OP"
+            // (Options) replaces the old "FX" label now that it opens a
+            // two-level menu (Effects + Playback), not just the flat
+            // Effects list - matches the existing 2-character convention
+            // of VW/PL/EQ exactly.
             drawToggle(kViewToggleX, kViewToggleY, kViewToggleW, kViewToggleH, "VW", viewMenuOpen,
                        viewToggleTextCache);
-            drawToggle(kEffectsToggleX, kEffectsToggleY, kEffectsToggleW, kEffectsToggleH, "FX", effectsMenuOpen,
-                       effectsToggleTextCache);
+            drawToggle(kEffectsToggleX, kEffectsToggleY, kEffectsToggleW, kEffectsToggleH, "OP",
+                       optionsMenuLevel != OptionsMenuLevel::Closed, effectsToggleTextCache);
 #endif
         }
 
@@ -2249,7 +2304,23 @@ int main(int argc, char** argv) {
                                 kViewMenuX + kViewMenuW - 2, kViewMenuY + 4 * kViewMenuItemH);
         }
 
-        if (effectsMenuOpen) {
+        // Options: a top-level 2-row picker (EFFECTS/PLAYBACK) that drills
+        // into either sub-list - mirrors the real macOS menu bar's
+        // Options>{Effects,Playback} submenu nesting one level deep in
+        // this hand-rolled dropdown instead of Cocoa's native nesting.
+        if (optionsMenuLevel == OptionsMenuLevel::Top) {
+            Bevel::Draw(renderer, kOptionsMenuTopX, kOptionsMenuTopY, kOptionsMenuTopW, kOptionsMenuTopH);
+            static const char* kOptionsTopLabels[kOptionsMenuTopItems] = {"EFFECTS", "PLAYBACK"};
+            for (int i = 0; i < kOptionsMenuTopItems; ++i) {
+                const int iy = kOptionsMenuTopY + i * kOptionsMenuItemH;
+                const int fieldWidth =
+                    static_cast<int>(std::strlen(kOptionsTopLabels[i])) * gfx::BitmapFont::kCellW;
+                DrawTextureAt(renderer,
+                              optionsMenuTopTextCache[static_cast<size_t>(i)].Get(renderer, font,
+                                                                                   kOptionsTopLabels[i], fieldWidth),
+                              kOptionsMenuTopX + 2, iy + (kOptionsMenuItemH - gfx::BitmapFont::kCellH) / 2);
+            }
+        } else if (optionsMenuLevel == OptionsMenuLevel::Effects) {
             Bevel::Draw(renderer, kEffectsMenuX, kEffectsMenuY, kEffectsMenuW, kEffectsMenuH);
             static const char* kEffectsMenuLabels[kEffectsMenuItems] = {"XSOUND", "REVERB", "SATURATION",
                                                                           "COMPRESSION", "CHORUS"};
@@ -2268,6 +2339,24 @@ int main(int argc, char** argv) {
                               effectsMenuTextCache[static_cast<size_t>(i)].Get(renderer, font, kEffectsMenuLabels[i],
                                                                                 fieldWidth),
                               kEffectsMenuX + 2, iy + (kEffectsMenuItemH - gfx::BitmapFont::kCellH) / 2);
+            }
+        } else if (optionsMenuLevel == OptionsMenuLevel::Playback) {
+            Bevel::Draw(renderer, kPlaybackMenuX, kPlaybackMenuY, kPlaybackMenuW, kPlaybackMenuH);
+            static const char* kPlaybackMenuLabels[kPlaybackMenuItems] = {"REPEAT", "RANDOM"};
+            const bool playbackOn[kPlaybackMenuItems] = {repeatEnabled, randomEnabled};
+            for (int i = 0; i < kPlaybackMenuItems; ++i) {
+                const int iy = kPlaybackMenuY + i * kOptionsMenuItemH;
+                if (playbackOn[i]) {
+                    SDL_SetRenderDrawColor(renderer, 0x1a, 0x5a, 0x2a, 255);
+                    SDL_Rect hi{kPlaybackMenuX + 1, iy, kPlaybackMenuW - 2, kOptionsMenuItemH};
+                    SDL_RenderFillRect(renderer, &hi);
+                }
+                const int fieldWidth =
+                    static_cast<int>(std::strlen(kPlaybackMenuLabels[i])) * gfx::BitmapFont::kCellW;
+                DrawTextureAt(renderer,
+                              playbackMenuTextCache[static_cast<size_t>(i)].Get(renderer, font,
+                                                                                 kPlaybackMenuLabels[i], fieldWidth),
+                              kPlaybackMenuX + 2, iy + (kOptionsMenuItemH - gfx::BitmapFont::kCellH) / 2);
             }
         }
 #endif
@@ -3112,7 +3201,21 @@ int main(int argc, char** argv) {
                      "5=StereoOscilloscope)\n";
     }
 
-    if (clickName == "mute") {
+    if (clickName == "repeat") {
+        // Debug hook: drives the exact same shared lambda both the Linux
+        // in-app Options>Playback dropdown and the macOS native
+        // Options>Playback menu item call - needed since neither of
+        // those real entry points is sim-clickable/scriptable headlessly
+        // (the Linux dropdown only exists in a non-__APPLE__ build; the
+        // macOS one is a real Cocoa NSMenu, invisible to SDL's event
+        // simulation).
+        toggleRepeat();
+        std::cout << "repeat=" << repeatEnabled << "\n";
+    } else if (clickName == "random") {
+        // Debug hook: see "repeat" above.
+        toggleRandom();
+        std::cout << "random=" << randomEnabled << "\n";
+    } else if (clickName == "mute") {
         // Debug hook: drives handleUtilityPress through the exact same
         // lambda the real mouse handler calls.
         pressedUtility = 1; // Mute's index in utilityButtons
@@ -3606,6 +3709,13 @@ int main(int argc, char** argv) {
                 case app::EffectsMenuAction::ToggleChorus: toggleChorus(); break;
             }
         }
+        // Posted by main_menu.mm's Playback-menu items.
+        if (ev.type == kPlaybackEventType) {
+            switch (static_cast<app::PlaybackMenuAction>(ev.user.code)) {
+                case app::PlaybackMenuAction::ToggleRepeat: toggleRepeat(); break;
+                case app::PlaybackMenuAction::ToggleRandom: toggleRandom(); break;
+            }
+        }
 #else
         // TODO: "when the main window is minimized or maximized all the
         // windows should minimize or maximize". Symmetric across all four
@@ -3785,8 +3895,19 @@ int main(int argc, char** argv) {
                             case 6: applyUiScale(100); break;                                           // Reset
                         }
                     }
-                } else if (effectsMenuOpen) {
-                    effectsMenuOpen = false;
+                } else if (optionsMenuLevel == OptionsMenuLevel::Top) {
+                    // Drills into whichever sub-list was clicked, or closes
+                    // outright on a click outside the top-level list -
+                    // same "any click while open closes/dispatches" rule,
+                    // just landing one level deeper instead of at Closed.
+                    const bool hit =
+                        inRect(lx, ly, kOptionsMenuTopX, kOptionsMenuTopY, kOptionsMenuTopW, kOptionsMenuTopH);
+                    const int item = hit ? (ly - kOptionsMenuTopY) / kOptionsMenuItemH : -1;
+                    optionsMenuLevel = (item == 0)   ? OptionsMenuLevel::Effects
+                                        : (item == 1) ? OptionsMenuLevel::Playback
+                                                       : OptionsMenuLevel::Closed;
+                } else if (optionsMenuLevel == OptionsMenuLevel::Effects) {
+                    optionsMenuLevel = OptionsMenuLevel::Closed;
                     if (inRect(lx, ly, kEffectsMenuX, kEffectsMenuY, kEffectsMenuW, kEffectsMenuH)) {
                         const int item = (ly - kEffectsMenuY) / kEffectsMenuItemH;
                         switch (item) {
@@ -3797,12 +3918,21 @@ int main(int argc, char** argv) {
                             case 4: toggleChorus(); break;
                         }
                     }
+                } else if (optionsMenuLevel == OptionsMenuLevel::Playback) {
+                    optionsMenuLevel = OptionsMenuLevel::Closed;
+                    if (inRect(lx, ly, kPlaybackMenuX, kPlaybackMenuY, kPlaybackMenuW, kPlaybackMenuH)) {
+                        const int item = (ly - kPlaybackMenuY) / kOptionsMenuItemH;
+                        switch (item) {
+                            case 0: toggleRepeat(); break;
+                            case 1: toggleRandom(); break;
+                        }
+                    }
                 } else if (inRect(lx, ly, kViewToggleX, kViewToggleY, kViewToggleW, kViewToggleH)) {
                     viewMenuOpen = true;
-                    effectsMenuOpen = false;
+                    optionsMenuLevel = OptionsMenuLevel::Closed;
                     ejectMenuOpen = false;
                 } else if (inRect(lx, ly, kEffectsToggleX, kEffectsToggleY, kEffectsToggleW, kEffectsToggleH)) {
-                    effectsMenuOpen = true;
+                    optionsMenuLevel = OptionsMenuLevel::Top;
                     viewMenuOpen = false;
                     ejectMenuOpen = false;
                 } else
@@ -4250,11 +4380,19 @@ int main(int argc, char** argv) {
         // the track (see engine.h's decoderExhausted_ comment - state_
         // only flips once everything decoded has actually reached the
         // speakers). userStoppedTrack disambiguates the two; only a
-        // natural end-of-track should pull in the next playlist entry.
+        // natural end-of-track should pull in the next playlist entry -
+        // and, now that Repeat/Random exist, *what* comes next depends on
+        // them (see app::NextAutoAdvanceIndex, mirroring PlayDone's exact
+        // Random > Repeat > sequential > stop priority order). Neither on
+        // now correctly stops at the end of the playlist instead of the
+        // previous placeholder's unconditional wrap.
         const audio::PlayState curEngineState = engine.state();
         if (lastEngineState == audio::PlayState::Playing && curEngineState == audio::PlayState::Stopped) {
             if (!userStoppedTrack && !playlist.empty()) {
-                openPlaylistIndex(playlist.WrappedIndex(1));
+                const int next = app::NextAutoAdvanceIndex(
+                    playlist.currentIndex(), playlist.size(), repeatEnabled, randomEnabled, shuffleBagState,
+                    playlist.Generation(), [](size_t n) { return static_cast<size_t>(std::rand()) % n; });
+                if (next != app::kStopPlayback) openPlaylistIndex(next);
             }
             userStoppedTrack = false;
         }
@@ -4349,6 +4487,8 @@ int main(int argc, char** argv) {
         toSave.saturation = engine.SaturationOn();
         toSave.compression = engine.CompressionOn();
         toSave.chorus = engine.ChorusOn();
+        toSave.repeat = repeatEnabled;
+        toSave.random = randomEnabled;
         toSave.eqPreset = eqCurrentPreset;
         toSave.visPanel = static_cast<int>(visPanel);
         toSave.perSongEq = perSongEqEnabled;

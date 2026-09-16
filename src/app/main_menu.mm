@@ -46,6 +46,10 @@ XmadMenuActionTarget* gEffectsTarget = nil;
 // the tray popup's), so SetEffectsMenuChecked below can keep every
 // instance of every effect in sync with a single call.
 std::unordered_map<int32_t, std::vector<NSMenuItem*>> gEffectsItemsByTag;
+
+XmadMenuActionTarget* gPlaybackTarget = nil;
+// Same idea as gEffectsItemsByTag, keyed by PlaybackMenuAction tag.
+std::unordered_map<int32_t, std::vector<NSMenuItem*>> gPlaybackItemsByTag;
 } // namespace
 
 namespace xmad::app {
@@ -111,6 +115,28 @@ NSMenu* BuildEffectsMenu(uint32_t effectsEventType) {
     }
 }
 
+NSMenu* BuildPlaybackMenu(uint32_t playbackEventType) {
+    @autoreleasepool {
+        if (!gPlaybackTarget) {
+            gPlaybackTarget = [[XmadMenuActionTarget alloc] init];
+            gPlaybackTarget.eventType = playbackEventType;
+        }
+
+        NSMenu* playbackMenu = [[NSMenu alloc] initWithTitle:@"Playback"];
+        auto addToggle = [&](NSString* title, PlaybackMenuAction action) {
+            NSMenuItem* item = [playbackMenu addItemWithTitle:title
+                                                         action:@selector(onMenuAction:)
+                                                  keyEquivalent:@""];
+            item.target = gPlaybackTarget;
+            item.tag = static_cast<int>(action);
+            gPlaybackItemsByTag[static_cast<int32_t>(action)].push_back(item);
+        };
+        addToggle(@"Repeat", PlaybackMenuAction::ToggleRepeat);
+        addToggle(@"Random", PlaybackMenuAction::ToggleRandom);
+        return playbackMenu;
+    }
+}
+
 } // namespace detail
 
 void InstallUiScaleMenu(uint32_t scaleEventType) {
@@ -135,16 +161,29 @@ void SetUiScaleMenuChecked(int currentPercent) {
     }
 }
 
-void InstallEffectsMenu(uint32_t effectsEventType) {
+void InstallOptionsMenu(uint32_t effectsEventType, uint32_t playbackEventType) {
     @autoreleasepool {
         static bool installed = false; // idempotent, same spirit as InstallUiScaleMenu
         if (installed) return;
         installed = true;
 
-        NSMenu* effectsMenu = detail::BuildEffectsMenu(effectsEventType);
-        NSMenuItem* effectsMenuItem = [[NSMenuItem alloc] initWithTitle:@"Effects" action:nil keyEquivalent:@""];
-        effectsMenuItem.submenu = effectsMenu;
-        [[NSApp mainMenu] addItem:effectsMenuItem];
+        // Top-level "Options" menu (matching the original's real "Option"
+        // menu - Source/Menu.frm's mnuXmPButton) holding Effects and
+        // Playback as submenus, rather than adding them directly to the
+        // menu bar the way the old flat InstallEffectsMenu did.
+        NSMenu* optionsMenu = [[NSMenu alloc] initWithTitle:@"Options"];
+
+        NSMenuItem* effectsItem = [[NSMenuItem alloc] initWithTitle:@"Effects" action:nil keyEquivalent:@""];
+        effectsItem.submenu = detail::BuildEffectsMenu(effectsEventType);
+        [optionsMenu addItem:effectsItem];
+
+        NSMenuItem* playbackItem = [[NSMenuItem alloc] initWithTitle:@"Playback" action:nil keyEquivalent:@""];
+        playbackItem.submenu = detail::BuildPlaybackMenu(playbackEventType);
+        [optionsMenu addItem:playbackItem];
+
+        NSMenuItem* optionsMenuItem = [[NSMenuItem alloc] initWithTitle:@"Options" action:nil keyEquivalent:@""];
+        optionsMenuItem.submenu = optionsMenu;
+        [[NSApp mainMenu] addItem:optionsMenuItem];
     }
 }
 
@@ -160,6 +199,18 @@ void SetEffectsMenuChecked(const EffectsMenuState& state) {
         apply(EffectsMenuAction::ToggleSaturation, state.saturation);
         apply(EffectsMenuAction::ToggleCompression, state.compression);
         apply(EffectsMenuAction::ToggleChorus, state.chorus);
+    }
+}
+
+void SetPlaybackMenuChecked(const PlaybackMenuState& state) {
+    @autoreleasepool {
+        auto apply = [](PlaybackMenuAction action, bool on) {
+            auto it = gPlaybackItemsByTag.find(static_cast<int32_t>(action));
+            if (it == gPlaybackItemsByTag.end()) return;
+            for (NSMenuItem* item : it->second) item.state = on ? NSControlStateValueOn : NSControlStateValueOff;
+        };
+        apply(PlaybackMenuAction::ToggleRepeat, state.repeat);
+        apply(PlaybackMenuAction::ToggleRandom, state.random);
     }
 }
 

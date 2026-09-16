@@ -1522,12 +1522,129 @@ below.
 - Full test suite green throughout, clean rebuild and `.app` bundle both
   confirmed.
 
+## TODO: "Repeat / Shuffle (Random) playback modes" - now implemented
+
+Read the real source first (`FunzioniGlobali.bas`'s `PlayDone`/`PlayRnd`,
+`modFunzioniAccessorie.bas`'s `SetLoop`/`SetRnd`) rather than guessing:
+the original has two independent booleans - `xmp.g_Ripeti` (Loop/Repeat,
+toggled via menu item `mnuLoop`) and `xmp.Acaso` (Random, `mnuRnd`) -
+consulted only in `PlayDone`, the natural-end-of-track handler, in this
+exact priority: Random first (pick a random not-yet-played track this
+"cycle", tracked via a scratch `rnd.___` file; if that bag is exhausted,
+restart at track 0 if Repeat is also on, else stop); else Repeat-at-the-
+last-track (restart at 0); else sequential advance; else stop. This
+port's existing auto-advance had been unconditionally wrapping forever
+(`playlist.WrappedIndex(1)`) as an explicitly-flagged placeholder for
+exactly this feature.
+
+**Decision logic**: new `include/app/playback_mode.h` +
+`src/app/playback_mode.cpp` - `app::NextAutoAdvanceIndex`, a pure
+function (no SDL/engine/playlist dependency) mirroring `PlayDone`'s exact
+4-case priority order, with randomness injected (`nextRandom`) so it's
+deterministically testable. One deliberate divergence from the original,
+per the user's explicit call: when Random's "already played" bag empties
+out while Repeat is also on, this reshuffles a fresh bag instead of the
+original's own quirk of just restarting sequentially at track 0 (which
+reads as an unintended side-effect of `PlayRnd`'s implementation, not a
+deliberate design choice). `app::ShuffleState` (the bag itself, plus a
+`Playlist::Generation()` tag) lives as a plain local next to the new
+`repeatEnabled`/`randomEnabled` bools in `main.cpp`, self-healing via the
+generation tag if the playlist mutates mid-cycle. Wired into the real
+`Playing -> Stopped` edge-check that already existed for auto-advance -
+manual Back/Next/row-click navigation (`playlist.WrappedIndex(...)`,
+mode-agnostic in the original too) is untouched. Covered by a new 9-case
+`tests/playback_mode_test.cpp` (sequential/stop, repeat-wrap, random
+exhaustion, the reshuffle divergence, single-track and empty-playlist
+edge cases, mid-cycle generation-mismatch reset).
+
+**UI - a real back-and-forth on this one**: the original had *no*
+dedicated button for either flag at all (menu-only; Repeat's only visual
+trace was a passive status-light icon on the Playlist window, not a
+clickable control). Two icon-button mockups (composited onto real
+`--dump-frame` captures, not hand-drawn from scratch) were built and
+rejected by the user in turn - the first put crude hand-drawn loop/
+shuffle glyphs into Main's utility-icon grid, the second moved them to
+the Playlist window's button row (which, notably, *did* land closer to
+period-accurate placement - Listone.frm's real `Ripeti` control sat
+exactly there, right after the Seek button - but the icon art itself was
+still the sticking point). Landed instead on reusing this port's
+**existing** native-menu infrastructure rather than inventing any new
+button chrome at all:
+- Restructured the existing macOS native "Effects" menu bar item and its
+  Linux in-app-dropdown twin into a new top-level **"Options"** menu
+  (matching the original's real `Option` menu name - `Menu.frm`'s
+  `mnuXmPButton`) holding two submenus: **"Effects"** (unchanged:
+  xSound/Reverb/Saturation/Compression/Chorus) and **"Playback"** (new:
+  Repeat, Random).
+- macOS (`include/app/main_menu.h`, `src/app/menu_internal.h`,
+  `src/app/main_menu.mm`): `InstallEffectsMenu` became
+  `InstallOptionsMenu(effectsEventType, playbackEventType)`, building a
+  real `NSMenu` "Options" with two submenu `NSMenuItem`s; new
+  `BuildPlaybackMenu`/`PlaybackMenuAction`/`PlaybackMenuState`/
+  `SetPlaybackMenuChecked` mirror the existing Effects ones exactly.
+  `menu_bar_icon.mm`'s tray right-click popup also gained a sibling
+  "Playback" item (flat, not nested under "Options" there - a tray popup
+  is conventionally flatter than a menu bar).
+- Linux (`src/main.cpp`'s `#ifndef __APPLE__` block): the on-screen "FX"
+  toggle button is relabeled **"OP"** (matching the existing 2-character
+  `VW`/`PL`/`EQ` convention) and now opens a two-level `OptionsMenuLevel`
+  state machine (`Closed`/`Top`/`Effects`/`Playback`) instead of jumping
+  straight to the flat Effects list - a top-level 2-row picker
+  ("EFFECTS"/"PLAYBACK") drills into either the existing 5-row Effects
+  list (unchanged position/size) or a new 2-row Playback list, same
+  "any click while open closes/dispatches" convention as every other
+  popup in this app, just one level deeper.
+- No new icon assets at all - the whole feature ships as text menu rows,
+  which also sidesteps the exact art-quality complaint that sank both
+  earlier button mockups.
+- Session persistence: new `Settings::repeat`/`random` fields
+  (`REPEAT=`/`RANDOM=` keys), same end-to-end pattern as `xSound` -
+  resumed into `repeatEnabled`/`randomEnabled` inside the existing
+  `resumeSession` block, saved back unconditionally on exit, round-trip
+  covered in `tests/session_test.cpp`. Also added to the "Resumed
+  session: ..." startup log line.
+- New `--click repeat`/`--click random` debug hooks (same shape as
+  `--click mute`) - needed *specifically* for verification on this
+  sandbox, since neither real entry point is scriptable here: the Linux
+  dropdown doesn't exist in a macOS build at all, and the macOS native
+  menu is real Cocoa, invisible to SDL's event simulation. Both drive the
+  exact same `toggleRepeat`/`toggleRandom` lambdas the real menu paths
+  call.
+
+**Verified for real**, through the actual production edge-check, not a
+reimplementation: built a real 3-track playlist (distinctly-named
+fixtures) and ran `--auto-advance-test` against all four priority-order
+cases via `--click repeat`/`--click random` -
+- Neither on: `0 -> 1 -> 2` then genuinely **stops** (`state=0`, no
+  further transitions even with seconds left on the clock) - the
+  concrete regression proof the old unconditional-wrap placeholder is
+  gone.
+- Repeat only: `0 -> 1 -> 2 -> 0 -> 1 -> 2 -> ...`, cycles indefinitely.
+- Random only: visits all 3 indices exactly once (e.g. `0 -> 2 -> 1`),
+  then stops - confirms bag-exhaustion-without-repeat halts correctly.
+- Random+Repeat (via a two-process sequence: save `repeat=1` via
+  `--click repeat` + a near-zero `--auto-advance-test`, then a second
+  argument-less relaunch resuming `repeat=1` and adding `--click random`):
+  kept cycling well past one full 3-track pass (7 transitions across 8s)
+  - the concrete proof of the reshuffle-on-exhaustion divergence, since
+  the original's restart-at-0 quirk could never produce that.
+- Session round-trip: the second process's "Resumed session: ...
+  repeat=1 random=0 ..." log line confirmed real save/load through
+  `settings.cfg`, and the file itself showed `REPEAT=1`/`RANDOM=1` after
+  both were enabled.
+- Full test suite green (`playback_mode_test` new, `session_test`
+  extended), clean rebuild and `.app` bundle both confirmed. The real
+  macOS native "Options > Playback > Repeat/Random" menu items
+  themselves still need a real-machine visual check (same limitation as
+  every other native-menu-bar feature in this project - this sandbox has
+  no real Cocoa runtime to click into).
+
 ## How to resume
 
 Just point me at this file, or at `TODO` (a running list the user adds to
 directly - work through it one line at a time, confirming each before
 starting, per their instruction). Nothing is mid-edit right now - the
-playlist scrollbar feature is complete, tested, and the full test suite is
-green. Next up on `TODO`: Repeat/Shuffle, ID3 tag editing, and two iOS/
+Repeat/Random playback-modes feature is complete, tested, and the full
+test suite is green. Next up on `TODO`: ID3 tag editing and two iOS/
 CarPlay items (the CarPlay port itself is on hold - see the top of this
 file's history for why).

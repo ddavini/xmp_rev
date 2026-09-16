@@ -25,4 +25,7 @@ NSMenu* BuildViewMenu(uint32_t scaleEventType);
 // Compression, Chorus).
 NSMenu* BuildEffectsMenu(uint32_t effectsEventType);
 
+// Same idea for the "Playback" menu (Repeat, Random).
+NSMenu* BuildPlaybackMenu(uint32_t playbackEventType);
+
 } // namespace xmad::app::detail

@@ -57,7 +57,7 @@ XmadMenuBarTarget* gTarget = nil;
 namespace xmad::app {
 
 void ShowMenuBarIcon(uint32_t restoreEventType, uint32_t scaleEventType, uint32_t effectsEventType,
-                      uint32_t aboutEventType) {
+                      uint32_t playbackEventType, uint32_t aboutEventType) {
     @autoreleasepool {
         if (gStatusItem) return;
         gTarget = [[XmadMenuBarTarget alloc] init];
@@ -71,6 +71,9 @@ void ShowMenuBarIcon(uint32_t restoreEventType, uint32_t scaleEventType, uint32_
         NSMenuItem* effectsItem = [[NSMenuItem alloc] initWithTitle:@"Effects" action:nil keyEquivalent:@""];
         effectsItem.submenu = detail::BuildEffectsMenu(effectsEventType);
         [popupMenu addItem:effectsItem];
+        NSMenuItem* playbackItem = [[NSMenuItem alloc] initWithTitle:@"Playback" action:nil keyEquivalent:@""];
+        playbackItem.submenu = detail::BuildPlaybackMenu(playbackEventType);
+        [popupMenu addItem:playbackItem];
         NSMenuItem* quitItem = [popupMenu addItemWithTitle:@"Quit" action:@selector(onQuitClick:) keyEquivalent:@""];
         quitItem.target = gTarget;
         [popupMenu addItem:[NSMenuItem separatorItem]];
