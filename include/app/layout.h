@@ -203,6 +203,22 @@ constexpr int kPlInfoX = kPlaylistSeekX + kPlaylistBtnPitch + 8;
 constexpr int kPlInfoW = kPlaylistWindowW - kPlInfoX - 8;
 constexpr int kPlInfoY0 = kPlaylistBtnY - 2, kPlInfoY1 = kPlaylistBtnY + 12, kPlInfoH = 12;
 
+// Playlist scrollbar (xmListBox's embedded ScrollBar, an xmSlide instance).
+// Real behavior per xmListBox.ctl: only shown when the list holds more rows
+// than fit (`UBound(g_List) > g_VisibleRows`), anchored flush against the
+// list's own right edge and eating into the row-text width rather than
+// widening the window (`g_RightTab` shifts left by ScrollBarWidth only
+// while it's actually visible - mirrored here as a conditional maxChars/
+// row-width in drawPlaylistFrame, not a permanent layout change). Sized to
+// the same 14x14 as the other real button assets (not a smaller custom
+// track) since its up/down arrows are literally FRECCIAUP/FRECCIADWN - the
+// same icons already reused for the volume slider and the Up/Down
+// move-track buttons above (skin.volUp/volDown) - and this app never
+// scales blits, so drawing them at any other size would clip/distort them.
+constexpr int kPlaylistScrollW = kPlaylistBtnW;
+constexpr int kPlaylistScrollArrowH = kPlaylistBtnH;
+constexpr int kPlaylistScrollX = kPlaylistListX + kPlaylistListW - kPlaylistScrollW;
+
 // EQ window (frmEQ.frm): 10-band graphic EQ. Width matches kWindowW so it
 // stacks flush with the main and playlist windows (Winamp-style: Main / EQ
 // / Playlist, edge to edge) rather than the original's exact behavior

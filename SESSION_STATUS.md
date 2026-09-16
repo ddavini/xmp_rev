@@ -1439,13 +1439,95 @@ not reimplementations): `--dump-frame/--dump-playlist-frame/--dump-eq-frame
 - Native file-open dialog was the last "not started" item — now done (Eject).
 - Repeat / Shuffle (Random) modes — not implemented; relevant to the
   auto-advance wraparound divergence noted above.
-- Playlist scrollbar, ID3 tag *editing* — flagged but not requested yet
-  (row duration and title-if-present *are* both done now, see above).
+- ID3 tag *editing* — flagged but not requested yet (row duration and
+  title-if-present *are* both done now, see above; the playlist scrollbar
+  is also done now, see below).
+
+## TODO: "Playlist scrollbar (thumb + up/down arrows, currently mouse-wheel
+only)" - now implemented
+
+Read the real source first (`xmplayer/Source/xmListBox.ctl` /
+`Listone.frm`) rather than guessing at a generic scrollbar: `ListaMp3` is a
+custom `xmListBox` control with an *embedded* `xmSlide` scrollbar
+(`ScrollBar`), sized to `ScrollBarWidth = CommandImg(5).Width` (14px, same
+as the other real playlist buttons) and anchored flush against the list's
+own right edge (`ScrollBar.Move ScaleWidth - ScrollBar.Width, 0, ...`) -
+eating into the row-text width, not widening the control. Also confirmed
+it's only ever shown when the list overflows
+(`If UBound(g_List) > g_VisibleRows Then ScrollBar.Visible = True`,
+`g_RightTab` shifts to match) - a short playlist gets the full row width,
+matching this port's own maxChars calc rather than always reserving the
+column. Separately found and *deliberately didn't port*:
+`CommandImg_MouseDown`'s Index 6/7 ("Lista Giu"/"Lista Su", a held-repeat
+scroll-by-one loop) reference array slots that don't actually exist
+anywhere in `Listone.frm`'s control declarations - dead code, unreachable
+in the real app, not a real feature to replicate.
+
+**What was built**: `kPlaylistScrollW/kPlaylistScrollArrowH` (both =
+`kPlaylistBtnW/H`, 14px - this app never scales blits, so the real
+FRECCIAUP/FRECCIADWN icons had to be drawn at their native size, not
+shrunk to fit a slimmer track) and `kPlaylistScrollX` in `layout.h`. The
+scrollbar - track background/border, up/down arrows (reusing
+`skin.volUp`/`volDown`, the exact same FRECCIAUP/FRECCIADWN asset already
+shared by the volume slider and the Up/Down move-track buttons - xmSlide
+really is one reusable control everywhere it appears in the original, not
+a bespoke asset per instance), and a proportional draggable thumb - is
+drawn in `drawPlaylistFrame` only when `playlist.size() > kPlVisibleRows`,
+at which point the row text/highlight width (`plListTextW`) shrinks to
+make room, exactly mirroring `g_RightTab`.
+- `handlePlaylistScrollClickAt(ly)`: click-to-jump on the track, same
+  shape as `handleVolSliderClickAt` (frac-of-track -> frac-of-maxOffset).
+  Also drives live drag-follow via `SDL_MOUSEMOTION` while `plScrollDragging`
+  is set - same per-frame-driven-not-event-gated pattern already used for
+  the volume/seek thumbs (a fast drag can outrun the window entirely).
+- Arrow clicks step `plScrollOffset` by exactly 1 per click rather than
+  the original's continuous MouseDown-held repeat loop - the same
+  documented simplification already established for the volume slider's
+  arrows (see `kVolStep`'s comment), applied here for the same reason
+  (those original indices were dead/unreachable anyway, so there's no
+  real behavior being simplified away, just a consistent interaction
+  model across every arrow-pair in this app).
+- Mouse wheel (already existing) and the new scrollbar both clamp through
+  one shared `plMaxScrollOffset()` lambda now, instead of the wheel
+  handler duplicating that arithmetic inline.
+- No `PlaylistFrameKey` change needed for the CPU-savings dirty-check from
+  earlier this session - `plScrollOffset` was already part of that key
+  (added when scrolling was wheel-only), so dragging the new thumb already
+  invalidates the cache and redraws correctly.
+
+**Verified for real, through the actual event path, not by poking state
+variables directly**: built a real 12-track playlist (distinctly-named
+fixtures, so scroll position is visually confirmable from content, not
+just thumb position) and isolated the `HOME` per the sandbox footgun noted
+below.
+- `--dump-playlist-frame` on the fresh load: scrollbar renders (track,
+  both arrows, a thumb sized to roughly 8/12 of the track), 8 rows shown
+  starting at SONG01.
+- `--sim-click pl <down-arrow-x,y>` three times (a real
+  `SDL_MOUSEBUTTONDOWN`/`UP` pair through `processEvent`, not a debug
+  shortcut) then dumped: list now starts at SONG04, thumb visibly moved
+  down - confirms single-step-per-click.
+- `--sim-click pl <x,y-near-bottom-of-track>` (track, not the arrow):
+  jumped straight to the last full page (SONG05-SONG12, offset clamped to
+  `maxOffset=4`), thumb at the bottom of its travel - confirms
+  click-to-jump math and clamping.
+- `--sim-click` on an ordinary row while the scrollbar is visible: still
+  selects that row (highlighted border correctly stops before the
+  scrollbar column, doesn't extend under it) - confirms the scrollbar's
+  hit-test is checked first without swallowing clicks meant for the list.
+- A 5-track playlist (`<= kPlVisibleRows`) dumped with no scrollbar at
+  all and full-width row text/highlight - confirms the
+  show-only-when-needed behavior matches the original instead of always
+  reserving the column.
+- Full test suite green throughout, clean rebuild and `.app` bundle both
+  confirmed.
 
 ## How to resume
 
 Just point me at this file, or at `TODO` (a running list the user adds to
 directly - work through it one line at a time, confirming each before
 starting, per their instruction). Nothing is mid-edit right now - the
-playlist row-duration feature is complete, tested, and the full 9-test
-suite is green.
+playlist scrollbar feature is complete, tested, and the full test suite is
+green. Next up on `TODO`: Repeat/Shuffle, ID3 tag editing, and two iOS/
+CarPlay items (the CarPlay port itself is on hold - see the top of this
+file's history for why).

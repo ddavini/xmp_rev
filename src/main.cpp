@@ -2287,6 +2287,24 @@ int main(int argc, char** argv) {
 
     int plSelected = -1;    // ListaMp3.ListIndex analogue
     int plScrollOffset = 0; // first visible row index
+    bool plScrollDragging = false; // true while the playlist scrollbar track/thumb is being dragged
+    auto plMaxScrollOffset = [&] { return std::max(0, static_cast<int>(playlist.size()) - kPlVisibleRows); };
+    auto plScrollbarVisible = [&] { return static_cast<int>(playlist.size()) > kPlVisibleRows; };
+    // Click-to-jump + drag-follow on the scrollbar's track, same shape as
+    // handleVolSliderClickAt. The arrows immediately above/below the track
+    // step by one row per click instead, handled inline at the call site -
+    // same single-step-per-click simplification already established for
+    // the volume slider's arrows (see kVolStep's comment) rather than the
+    // original's continuous MouseDown-held repeat loop.
+    auto handlePlaylistScrollClickAt = [&](int ly) {
+        const int top = kPlaylistListY + kPlaylistScrollArrowH;
+        const int bottom = kPlaylistListY + kPlaylistListH - kPlaylistScrollArrowH;
+        const int maxOffset = plMaxScrollOffset();
+        if (bottom <= top || maxOffset <= 0) return;
+        const int clamped = std::clamp(ly, top, bottom);
+        const float frac = static_cast<float>(clamped - top) / static_cast<float>(bottom - top);
+        plScrollOffset = std::clamp(static_cast<int>(std::lround(frac * maxOffset)), 0, maxOffset);
+    };
     int plPressedButton = -1;
     Uint32 lastClickTimeMs = 0;
     int lastClickedRow = -1;
@@ -2401,6 +2419,12 @@ int main(int argc, char** argv) {
         }
         DrawCloseIcon(plRenderer, kCloseX, kCloseY, kCloseSize);
 
+        // Real behavior (xmListBox.ctl's g_RightTab): the scrollbar only
+        // exists, and only eats into the row-text width, once there are
+        // more rows than fit - a short playlist gets the full list width.
+        const bool plScrollVisible = plScrollbarVisible();
+        const int plListTextW = plScrollVisible ? (kPlaylistListW - kPlaylistScrollW) : kPlaylistListW;
+
         for (int row = 0; row < kPlVisibleRows; ++row) {
             const int idx = plScrollOffset + row;
             if (idx < 0 || static_cast<size_t>(idx) >= playlist.size()) break;
@@ -2414,16 +2438,16 @@ int main(int argc, char** argv) {
                 // that the full-brightness row text (drawn on top, below)
                 // stays legible against it.
                 SDL_SetRenderDrawColor(plRenderer, 0x0f, 0x40, 0x1d, 255);
-                SDL_Rect bg{kPlaylistListX, ry, kPlaylistListW, kPlaylistRowH};
+                SDL_Rect bg{kPlaylistListX, ry, plListTextW, kPlaylistRowH};
                 SDL_RenderFillRect(plRenderer, &bg);
             }
             if (isSelected) {
                 SDL_SetRenderDrawColor(plRenderer, 0x3d, 0xff, 0x74, 255);
-                SDL_Rect bg{kPlaylistListX, ry, kPlaylistListW, kPlaylistRowH};
+                SDL_Rect bg{kPlaylistListX, ry, plListTextW, kPlaylistRowH};
                 SDL_RenderDrawRect(plRenderer, &bg);
             }
 
-            const int maxChars = (kPlaylistListW - 4) / gfx::BitmapFont::kCellW;
+            const int maxChars = (plListTextW - 4) / gfx::BitmapFont::kCellW;
             // Mirrors "DurataStream(...) & ' - ' & name" (see
             // getPlaylistDuration's doc comment above); name is the tagged
             // title if present, else the filename (getPlaylistDisplayName).
@@ -2439,6 +2463,36 @@ int main(int argc, char** argv) {
         SDL_SetRenderDrawColor(plRenderer, 0x23, 0x26, 0x20, 255);
         SDL_Rect listBorder{kPlaylistListX, kPlaylistListY, kPlaylistListW, kPlaylistListH};
         SDL_RenderDrawRect(plRenderer, &listBorder);
+
+        if (plScrollVisible) {
+            // Track background, dim like the list interior itself.
+            SDL_SetRenderDrawColor(plRenderer, 0x0a, 0x0c, 0x07, 255);
+            SDL_Rect track{kPlaylistScrollX, kPlaylistListY, kPlaylistScrollW, kPlaylistListH};
+            SDL_RenderFillRect(plRenderer, &track);
+            SDL_SetRenderDrawColor(plRenderer, 0x23, 0x26, 0x20, 255);
+            SDL_RenderDrawRect(plRenderer, &track);
+
+            DrawTextureAt(plRenderer, plTexUp, kPlaylistScrollX, kPlaylistListY);
+            DrawTextureAt(plRenderer, plTexDown, kPlaylistScrollX,
+                          kPlaylistListY + kPlaylistListH - kPlaylistScrollArrowH);
+
+            const int trackTop = kPlaylistListY + kPlaylistScrollArrowH;
+            const int trackBottom = kPlaylistListY + kPlaylistListH - kPlaylistScrollArrowH;
+            const int trackH = trackBottom - trackTop;
+            const int maxOffset = plMaxScrollOffset();
+            // Thumb height proportional to how much of the list is visible
+            // at once, floored so it never shrinks to nothing on a very
+            // long playlist - mirrors a standard scrollbar thumb, not
+            // anything the original's own xmSlide computes for itself
+            // (SelectedCount/xMax-only), since drag-follow needs a real
+            // grabbable target either way.
+            const int thumbH = std::clamp(trackH * kPlVisibleRows / (static_cast<int>(playlist.size())), 4, trackH);
+            const float frac = maxOffset > 0 ? static_cast<float>(plScrollOffset) / static_cast<float>(maxOffset) : 0.0f;
+            const int thumbY = trackTop + static_cast<int>(frac * (trackH - thumbH));
+            SDL_SetRenderDrawColor(plRenderer, 0x3d, 0xff, 0x74, 255);
+            SDL_Rect thumb{kPlaylistScrollX + 1, thumbY, kPlaylistScrollW - 2, thumbH};
+            SDL_RenderFillRect(plRenderer, &thumb);
+        }
 
         DrawTextureAt(plRenderer, plTexClear, kPlaylistClearX, kPlaylistBtnY);
         DrawTextureAt(plRenderer, plTexDelete, kPlaylistDeleteX, kPlaylistBtnY);
@@ -3842,6 +3896,19 @@ int main(int argc, char** argv) {
                     SDL_HideWindow(plWindow);
                 } else if (ly < kDragStripH) {
                     beginDrag(plDrag);
+                } else if (plScrollbarVisible() &&
+                           inRect(lx, ly, kPlaylistScrollX, kPlaylistListY, kPlaylistScrollW, kPlaylistListH)) {
+                    const int top = kPlaylistListY + kPlaylistScrollArrowH;
+                    const int bottom = kPlaylistListY + kPlaylistListH - kPlaylistScrollArrowH;
+                    const int maxOffset = plMaxScrollOffset();
+                    if (ly < top) {
+                        plScrollOffset = std::clamp(plScrollOffset - 1, 0, maxOffset);
+                    } else if (ly >= bottom) {
+                        plScrollOffset = std::clamp(plScrollOffset + 1, 0, maxOffset);
+                    } else {
+                        plScrollDragging = true;
+                        handlePlaylistScrollClickAt(ly);
+                    }
                 } else {
                     handlePlaylistClickAt(lx, ly);
                 }
@@ -3877,6 +3944,7 @@ int main(int argc, char** argv) {
             eqPressedPreset = -1;
             volDragging = false;
             seekDragging = false;
+            plScrollDragging = false;
             mainDrag.active = plDrag.active = eqDrag.active = infoDrag.active = aboutDrag.active = false;
         } else if (ev.type == SDL_MOUSEMOTION) {
             // Dragging itself is driven per-frame below, not from here - a
@@ -3892,6 +3960,9 @@ int main(int argc, char** argv) {
             if (seekDragging && ev.motion.windowID == mainWindowID) {
                 handleSeekBarClickAt(static_cast<int>(ev.motion.x / scale));
             }
+            if (plScrollDragging && ev.motion.windowID == plWindowID) {
+                handlePlaylistScrollClickAt(static_cast<int>(ev.motion.y / scale));
+            }
             if (ev.motion.windowID == mainWindowID) {
                 mainMouseX = static_cast<int>(ev.motion.x / scale);
                 mainMouseY = static_cast<int>(ev.motion.y / scale);
@@ -3901,8 +3972,7 @@ int main(int argc, char** argv) {
             mainMouseX = mainMouseY = -1; // stop showing a stale tooltip once the cursor leaves
         } else if (ev.type == SDL_MOUSEWHEEL && ev.wheel.windowID == plWindowID) {
             plScrollOffset -= ev.wheel.y;
-            const int maxOffset = std::max(0, static_cast<int>(playlist.size()) - kPlVisibleRows);
-            plScrollOffset = std::clamp(plScrollOffset, 0, maxOffset);
+            plScrollOffset = std::clamp(plScrollOffset, 0, plMaxScrollOffset());
         } else if (ev.type == SDL_DROPFILE) {
             // SDL owns this string (SDL_malloc'd) - must free it.
             handleDroppedFile(ev.drop.file);
