@@ -74,17 +74,35 @@ SDL_Texture* UploadTexture(SDL_Renderer* renderer, const gfx::Image& img) {
 void ApplyHiDpiRenderScale(SDL_Renderer* renderer, int logicalW, int logicalH) {
     int outW = logicalW, outH = logicalH;
     SDL_GetRendererOutputSize(renderer, &outW, &outH);
+    // Must be the *exact* outW/outH ratio, not rounded: SDL_RenderSetScale
+    // only changes how logical coordinates map onto the renderer's already-
+    // allocated real backing store - it can never make that backing store
+    // bigger. A previous version of this rounded to the nearest whole pixel
+    // multiple to fix uneven nearest-neighbor glyph scaling (see git log),
+    // but on a fractional-scale desktop compositor (e.g. a 5/3 = 1.667x
+    // display scale, which combines with our own UI-scale percent into a
+    // non-integer ratio at most zoom levels) rounding UP made draws target
+    // pixels past the real backing store's edge - the actual cause of
+    // windows rendering with content clipped/pushed outside their visible
+    // bounds after a rescale. Exact-fit is the only value that's always
+    // safe; text staying slightly uneven at non-integer ratios is a
+    // cosmetic tradeoff, not a correctness one.
     SDL_RenderSetScale(renderer, static_cast<float>(outW) / logicalW, static_cast<float>(outH) / logicalH);
 }
 
-// TODO: "Add a setting for UI scale / text+button size". Snaps any stored
-// value - including a corrupt/future one read back from settings.cfg - to
-// the nearest of the three levels this app actually supports, rather than
-// trusting the raw number all the way into window-size arithmetic.
+// TODO: "Add a setting for UI scale / text+button size". The full set of
+// UI-scale levels the View menu / Zoom In/Out step through, and that
+// SnapUiScalePercent below snaps any stored value - including a corrupt/
+// future one read back from settings.cfg - to, rather than trusting the
+// raw number all the way into window-size arithmetic. Shared by
+// SnapUiScalePercent, the Linux View menu's Zoom In/Out (main.cpp's
+// processEvent), and macOS's Cmd+/Cmd- menu equivalents (main_menu.h's
+// UiScaleMenuAction::ZoomIn/ZoomOut) so all three stay in sync.
+constexpr int kUiScaleLevels[] = {100, 125, 150, 200, 250, 300, 350, 400};
+
 int SnapUiScalePercent(int raw) {
-    static constexpr int kLevels[] = {100, 125, 150};
-    int best = kLevels[0];
-    for (int lvl : kLevels) {
+    int best = kUiScaleLevels[0];
+    for (int lvl : kUiScaleLevels) {
         if (std::abs(lvl - raw) < std::abs(best - raw)) best = lvl;
     }
     return best;
@@ -385,16 +403,21 @@ bool LooksLikeSkinDir(const std::string& dir) {
 // No assetDir given on the command line: figure out where our own assets
 // are instead of assuming the caller's shell happens to be sitting in the
 // repo root. Tries, in order: the macOS .app bundle's bundled copy
-// (Contents/MacOS/xmad -> Contents/Resources/skin), a copy sitting next to
-// the binary (e.g. an extracted Linux tarball), then finally falls back to
-// the plain "assets/skin" relative path the dev workflow (`make run` /
-// `./build/xmad` from the repo root) has always used - so nothing already
-// working regresses.
+// (Contents/MacOS/xmad -> Contents/Resources/skin), the flat "skin" dir
+// next to the binary (the extracted Linux tarball layout), an "assets/skin"
+// dir next to the binary (e.g. a hand-copied build), then finally falls
+// back to the plain "assets/skin" relative path the dev workflow
+// (`make run` / `./build/xmad` from the repo root) has always used - so
+// nothing already working regresses.
 std::string ResolveDefaultAssetDir() {
     const std::string exeDir = ExecutableDir();
     if (!exeDir.empty()) {
         const std::string bundleSkin = exeDir + "/../Resources/skin";
         if (LooksLikeSkinDir(bundleSkin)) return bundleSkin;
+        // Flat layout the Linux tarball actually ships (see Makefile's
+        // `tarball` target: xmad + skin/ side by side, no "assets/" prefix).
+        const std::string flatSkin = exeDir + "/skin";
+        if (LooksLikeSkinDir(flatSkin)) return flatSkin;
         const std::string sideSkin = exeDir + "/assets/skin";
         if (LooksLikeSkinDir(sideSkin)) return sideSkin;
     }
@@ -739,6 +762,12 @@ int main(int argc, char** argv) {
     // marked minimized can trigger the cascade back out.
     bool mainMinimized = false, eqMinimized = false, plMinimized = false, infoMinimized = false,
          aboutMinimized = false;
+#ifndef __APPLE__
+    // Timestamp of the last time our own minimize cascade (below) called
+    // SDL_MinimizeWindow on a *secondary* window - see its use in the
+    // restore branch for why.
+    Uint32 lastCascadeMinimizeMs = 0;
+#endif
 #ifdef __APPLE__
     // Separate from the per-window *Minimized bools above: those can each
     // flip multiple times during one user minimize/restore action (every
@@ -1349,6 +1378,14 @@ int main(int argc, char** argv) {
     // mirrors the Playlist window's Save-button menu pattern
     // (plSaveMenuOpen) one level up, in the main window instead.
     bool ejectMenuOpen = false;
+#ifndef __APPLE__
+    // Linux has no native menu bar (macOS gets its View/Effects menus from
+    // app/main_menu.h's NSMenu bridging - see the #ifdef __APPLE__ blocks
+    // below) - these back the in-window dropdown twins instead, same
+    // mutual-exclusion convention as ejectMenuOpen/plSaveMenuOpen.
+    bool viewMenuOpen = false;
+    bool effectsMenuOpen = false;
+#endif
 
     // Distinguishes "user pressed Stop" from "track finished naturally" -
     // both end up as engine.state() == Stopped, but only the latter should
@@ -1412,6 +1449,10 @@ int main(int argc, char** argv) {
             }
             case TransportAction::Eject:
                 ejectMenuOpen = !ejectMenuOpen;
+#ifndef __APPLE__
+                viewMenuOpen = false;
+                effectsMenuOpen = false;
+#endif
                 break;
         }
     };
@@ -1514,6 +1555,11 @@ int main(int argc, char** argv) {
     CachedTextTexture peakLLabelCache, peakRLabelCache; // "L"/"R" next to the peak meter row (TODO)
     CachedTextTexture plToggleTextCache, eqToggleTextCache, visTooltipTextCache;
     std::array<CachedTextTexture, 2> ejectMenuTextCache; // Add Files, Add Folder
+#ifndef __APPLE__
+    CachedTextTexture viewToggleTextCache, effectsToggleTextCache;
+    std::array<CachedTextTexture, kViewMenuItems> viewMenuTextCache;
+    std::array<CachedTextTexture, kEffectsMenuItems> effectsMenuTextCache;
+#endif
 
     auto drawFrame = [&]() {
         SDL_SetRenderDrawColor(renderer, 0x10, 0x12, 0x09, 255);
@@ -1557,6 +1603,14 @@ int main(int argc, char** argv) {
             };
             drawToggle(kPlToggleX, kPlToggleY, kPlToggleW, kPlToggleH, "PL", plUserVisible, plToggleTextCache);
             drawToggle(kEqToggleX, kEqToggleY, kEqToggleW, kEqToggleH, "EQ", eqUserVisible, eqToggleTextCache);
+#ifndef __APPLE__
+            // View/Effects dropdown triggers - macOS gets real NSMenu items
+            // instead (app/main_menu.h), so these only exist here.
+            drawToggle(kViewToggleX, kViewToggleY, kViewToggleW, kViewToggleH, "VW", viewMenuOpen,
+                       viewToggleTextCache);
+            drawToggle(kEffectsToggleX, kEffectsToggleY, kEffectsToggleW, kEffectsToggleH, "FX", effectsMenuOpen,
+                       effectsToggleTextCache);
+#endif
         }
 
         // lnSposta/lnSposta2: the green double-line "handle" strip under the
@@ -2097,6 +2151,64 @@ int main(int argc, char** argv) {
             SDL_RenderDrawLine(renderer, kEjectMenuX + 1, kEjectMenuY + kEjectMenuItemH,
                                 kEjectMenuX + kEjectMenuW - 2, kEjectMenuY + kEjectMenuItemH);
         }
+
+#ifndef __APPLE__
+        // Linux equivalents of macOS's native View/Effects NSMenu items
+        // (app/main_menu.h) - same Bevel::Draw-then-rows chrome as the
+        // Eject/Save menus above, drawn last so they sit on top. No cached
+        // "checked" struct to keep in sync (unlike SetUiScaleMenuChecked/
+        // SetEffectsMenuChecked on macOS): this redraws from live engine/
+        // uiScalePercent state every frame, so the highlighted row is
+        // always correct with nothing to invalidate.
+        if (viewMenuOpen) {
+            Bevel::Draw(renderer, kViewMenuX, kViewMenuY, kViewMenuW, kViewMenuH);
+            // No '%' glyph in this bitmap font (gfx::BitmapFont::CharToCell
+            // falls through to a placeholder cell for it) - digits-only
+            // labels avoid that instead of rendering a stray dot.
+            static const char* kViewMenuLabels[kViewMenuItems] = {"100",    "200",      "300",    "400",
+                                                                    "ZOOM IN", "ZOOM OUT", "RESET"};
+            static constexpr int kViewMenuPresets[4] = {100, 200, 300, 400};
+            for (int i = 0; i < kViewMenuItems; ++i) {
+                const int iy = kViewMenuY + i * kViewMenuItemH;
+                const bool isCurrent = i < 4 && uiScalePercent == kViewMenuPresets[i];
+                if (isCurrent) {
+                    SDL_SetRenderDrawColor(renderer, 0x1a, 0x5a, 0x2a, 255);
+                    SDL_Rect hi{kViewMenuX + 1, iy, kViewMenuW - 2, kViewMenuItemH};
+                    SDL_RenderFillRect(renderer, &hi);
+                }
+                const int fieldWidth = static_cast<int>(std::strlen(kViewMenuLabels[i])) * gfx::BitmapFont::kCellW;
+                DrawTextureAt(renderer,
+                              viewMenuTextCache[static_cast<size_t>(i)].Get(renderer, font, kViewMenuLabels[i],
+                                                                             fieldWidth),
+                              kViewMenuX + 2, iy + (kViewMenuItemH - gfx::BitmapFont::kCellH) / 2);
+            }
+            SDL_SetRenderDrawColor(renderer, 0x23, 0x26, 0x20, 255);
+            SDL_RenderDrawLine(renderer, kViewMenuX + 1, kViewMenuY + 4 * kViewMenuItemH,
+                                kViewMenuX + kViewMenuW - 2, kViewMenuY + 4 * kViewMenuItemH);
+        }
+
+        if (effectsMenuOpen) {
+            Bevel::Draw(renderer, kEffectsMenuX, kEffectsMenuY, kEffectsMenuW, kEffectsMenuH);
+            static const char* kEffectsMenuLabels[kEffectsMenuItems] = {"XSOUND", "REVERB", "SATURATION",
+                                                                          "COMPRESSION", "CHORUS"};
+            const bool effectsOn[kEffectsMenuItems] = {engine.XSound(), engine.ReverbOn(), engine.SaturationOn(),
+                                                        engine.CompressionOn(), engine.ChorusOn()};
+            for (int i = 0; i < kEffectsMenuItems; ++i) {
+                const int iy = kEffectsMenuY + i * kEffectsMenuItemH;
+                if (effectsOn[i]) {
+                    SDL_SetRenderDrawColor(renderer, 0x1a, 0x5a, 0x2a, 255);
+                    SDL_Rect hi{kEffectsMenuX + 1, iy, kEffectsMenuW - 2, kEffectsMenuItemH};
+                    SDL_RenderFillRect(renderer, &hi);
+                }
+                const int fieldWidth =
+                    static_cast<int>(std::strlen(kEffectsMenuLabels[i])) * gfx::BitmapFont::kCellW;
+                DrawTextureAt(renderer,
+                              effectsMenuTextCache[static_cast<size_t>(i)].Get(renderer, font, kEffectsMenuLabels[i],
+                                                                                fieldWidth),
+                              kEffectsMenuX + 2, iy + (kEffectsMenuItemH - gfx::BitmapFont::kCellH) / 2);
+            }
+        }
+#endif
     };
 
     // ---- playlist window (Listone.frm) ----
@@ -3183,6 +3295,14 @@ int main(int argc, char** argv) {
         return lx >= rx && lx < rx + rw && ly >= ry && ly < ry + rh;
     };
 
+    // Declared here (rather than down by the loop that reads them) so
+    // applyUiScale below can reach in and force a redraw after a rescale -
+    // see its own trailing reset of these.
+    std::optional<PlaylistFrameKey> lastPlKey;
+    std::optional<EqFrameKey> lastEqKey;
+    std::optional<InfoFrameKey> lastInfoKey;
+    bool aboutDrawnOnce = false;
+
     // TODO: "Add a setting for UI scale / text+button size" - the live
     // rescale entry point, called from the View menu / Cmd+/-/0 (see
     // processEvent's kUiScaleEventType branch below). Re-stacks all 5
@@ -3221,6 +3341,20 @@ int main(int argc, char** argv) {
 #ifdef __APPLE__
         app::SetUiScaleMenuChecked(uiScalePercent);
 #endif
+        // Playlist/EQ/Info only redraw+present when their content key
+        // changes (see the main loop below) - none of those keys include
+        // window size/scale, so without this a rescale that doesn't also
+        // happen to change the current track/EQ bands/etc. leaves them
+        // showing a stale frame in a freshly resized (and possibly, on a
+        // compositor that resizes asynchronously, momentarily garbage-
+        // filled) backing buffer. Forcing all three "dirty" here - plus
+        // re-arming About's one-shot draw - guarantees the very next loop
+        // iteration redraws every window at the new size regardless of
+        // whether anything else changed.
+        lastPlKey.reset();
+        lastEqKey.reset();
+        lastInfoKey.reset();
+        aboutDrawnOnce = false;
     };
 
     // Shared by the real interactive loop below AND the --sim-click-*
@@ -3242,6 +3376,36 @@ int main(int argc, char** argv) {
             else if (ev.window.windowID == eqWindowID) { eqUserVisible = false; SDL_HideWindow(eqWindow); }
             else if (ev.window.windowID == infoWindowID) { infoUserVisible = false; SDL_HideWindow(infoWindow); }
             else if (ev.window.windowID == aboutWindowID) { aboutUserVisible = false; SDL_HideWindow(aboutWindow); }
+        }
+        if (ev.type == SDL_WINDOWEVENT && ev.window.event == SDL_WINDOWEVENT_SIZE_CHANGED) {
+            // A window manager can resize a window's actual backing
+            // surface asynchronously relative to our SDL_SetWindowSize
+            // request in applyUiScale (observed on Wayland) -
+            // ApplyHiDpiRenderScale's SDL_GetRendererOutputSize call right
+            // after that request can then see the *old* size and compute a
+            // render scale that's never revisited, leaving that window's
+            // content confined to (or smeared past) the wrong fraction of
+            // its new size - the "fonts look like garbage" symptom.
+            // Re-applying here, on the real SIZE_CHANGED event that fires
+            // once the backing surface has actually changed, is correct
+            // regardless of that timing. Also re-arms each window's
+            // redraw-on-change gate, since none of those keys factor in
+            // size/scale (see applyUiScale's own reset of the same).
+            if (ev.window.windowID == mainWindowID) {
+                ApplyHiDpiRenderScale(renderer, app::layout::kWindowW, app::layout::kWindowH);
+            } else if (ev.window.windowID == eqWindowID) {
+                ApplyHiDpiRenderScale(eqRenderer, app::layout::kEqWindowW, app::layout::kEqWindowH);
+                lastEqKey.reset();
+            } else if (ev.window.windowID == plWindowID) {
+                ApplyHiDpiRenderScale(plRenderer, app::layout::kPlaylistWindowW, app::layout::kPlaylistWindowH);
+                lastPlKey.reset();
+            } else if (ev.window.windowID == infoWindowID) {
+                ApplyHiDpiRenderScale(infoRenderer, app::layout::kInfoWindowW, app::layout::kInfoWindowH);
+                lastInfoKey.reset();
+            } else if (ev.window.windowID == aboutWindowID) {
+                ApplyHiDpiRenderScale(aboutRenderer, app::layout::kAboutWindowW, app::layout::kAboutWindowH);
+                aboutDrawnOnce = false;
+            }
         }
 #ifdef __APPLE__
         // Only reachable if something other than the minimize button
@@ -3301,17 +3465,17 @@ int main(int argc, char** argv) {
         // by main_menu.mm's View-menu items and their Cmd+/-/0 key
         // equivalents.
         if (ev.type == kUiScaleEventType) {
-            static constexpr int kLevels[] = {100, 125, 150};
+            constexpr int kMaxIdx = static_cast<int>(std::size(kUiScaleLevels)) - 1;
             int idx = 0;
-            for (int i = 0; i < 3; ++i) {
-                if (kLevels[i] == uiScalePercent) idx = i;
+            for (int i = 0; i <= kMaxIdx; ++i) {
+                if (kUiScaleLevels[i] == uiScalePercent) idx = i;
             }
             switch (static_cast<app::UiScaleMenuAction>(ev.user.code)) {
                 case app::UiScaleMenuAction::Set100: applyUiScale(100); break;
                 case app::UiScaleMenuAction::Set125: applyUiScale(125); break;
                 case app::UiScaleMenuAction::Set150: applyUiScale(150); break;
-                case app::UiScaleMenuAction::ZoomIn: applyUiScale(kLevels[std::min(idx + 1, 2)]); break;
-                case app::UiScaleMenuAction::ZoomOut: applyUiScale(kLevels[std::max(idx - 1, 0)]); break;
+                case app::UiScaleMenuAction::ZoomIn: applyUiScale(kUiScaleLevels[std::min(idx + 1, kMaxIdx)]); break;
+                case app::UiScaleMenuAction::ZoomOut: applyUiScale(kUiScaleLevels[std::max(idx - 1, 0)]); break;
                 case app::UiScaleMenuAction::Reset: applyUiScale(100); break;
             }
         }
@@ -3326,71 +3490,38 @@ int main(int argc, char** argv) {
             }
         }
 #else
+        // TODO: "when the main window is minimized or maximized all the
+        // windows should minimize or maximize". Symmetric across all four
+        // windows, not just Main: each is a genuinely separate top-level
+        // window, but only Main is ever genuinely WM-minimized on this
+        // platform - EQ/Playlist/Info/About are cascade-hidden/shown
+        // instead (see the MINIMIZED/restore branches below for why), so
+        // in practice only Main's own taskbar entry drives this cascade;
+        // the others simply disappear/reappear with it as a unit.
+        //
+        // Listens for both SDL_WINDOWEVENT_RESTORED and FOCUS_GAINED as
+        // restore triggers for whichever window *is* genuinely minimized
+        // (Main): three rounds of live testing on this platform found
+        // RESTORED alone isn't always delivered (FOCUS_GAINED is more
+        // consistent), but plain FOCUS_GAINED alone is *too* eager - it
+        // also fires as a side effect of the cascade's own SDL_HideWindow
+        // calls just below shifting focus around, which made every
+        // minimize immediately pop back up. lastCascadeMinimizeMs
+        // debounces just that self-inflicted case - a FOCUS_GAINED within
+        // kFocusGainedDebounceMs of our own cascade is presumed to be that
+        // side effect, not a real user restore; RESTORED is trusted
+        // unconditionally since it never misfired in testing, only
+        // under-fired.
+        //
+        // userVisible gates which windows are even eligible - a window
+        // the user closed on purpose stays closed regardless of what Main
+        // or anything else does. Main has no user-hide concept (only
+        // Close, which quits), so it's always eligible. "Maximize" (the
+        // repurposed LitePic triangle - see toggleMaximize) has its own
+        // independent show/hide logic and isn't part of this cascade.
         if (ev.type == SDL_WINDOWEVENT && (ev.window.event == SDL_WINDOWEVENT_MINIMIZED ||
                                             ev.window.event == SDL_WINDOWEVENT_RESTORED ||
                                             ev.window.event == SDL_WINDOWEVENT_FOCUS_GAINED)) {
-            // TODO: "when the main window is minimized or maximized all
-            // the windows should minimize or maximize". Symmetric across
-            // all four windows, not just Main: each is a genuinely
-            // separate top-level window, so on macOS each gets its own
-            // Dock icon once minimized, and restoring *any one* of those
-            // icons must bring the rest back too.
-            //
-            // Two real-machine-only bugs already found and fixed here:
-            // (1) an earlier version only listened on Main, so restoring
-            // via any other window's Dock icon restored just that one.
-            // (2) after fixing that, restoring via a *secondary* window's
-            // Dock icon still didn't cascade - SDL_WINDOWEVENT_RESTORED
-            // was only ever observed to actually arrive for Main; testing
-            // also separately confirmed SDL_MinimizeWindow sets
-            // SDL_WINDOW_HIDDEN alongside SDL_WINDOW_MINIMIZED on this
-            // platform, ruling out that flag as a way to detect "still
-            // minimized" too. So this now also reacts to
-            // SDL_WINDOWEVENT_FOCUS_GAINED - reliably delivered by any
-            // Dock-icon click - gated on our *own* minimized-bool
-            // bookkeeping (mainMinimized/eqMinimized/plMinimized/
-            // infoMinimized, set only by this same code, never read from
-            // an SDL flag) rather than SDL's state, so an ordinary click
-            // on an already-visible window can't misfire this.
-            //
-            // userVisible gates which windows are even eligible - a
-            // window the user closed on purpose stays closed regardless
-            // of what Main or anything else does. Main has no user-hide
-            // concept (only Close, which quits), so it's always eligible.
-            // "Maximize" (the repurposed LitePic triangle - see
-            // toggleMaximize) has its own independent show/hide logic and
-            // isn't part of this cascade.
-            // TODO: "when the main window is minimized or maximized all
-            // the windows should minimize or maximize". Symmetric across
-            // all four windows, not just Main: each is a genuinely
-            // separate top-level window, so on macOS each gets its own
-            // Dock icon once minimized, and restoring *any one* of those
-            // icons must bring the rest back too.
-            //
-            // Two real-machine-only bugs already found and fixed here:
-            // (1) an earlier version only listened on Main, so restoring
-            // via any other window's Dock icon restored just that one.
-            // (2) after fixing that, restoring via a *secondary* window's
-            // Dock icon still didn't cascade - SDL_WINDOWEVENT_RESTORED
-            // was only ever observed to actually arrive for Main; testing
-            // also separately confirmed SDL_MinimizeWindow sets
-            // SDL_WINDOW_HIDDEN alongside SDL_WINDOW_MINIMIZED on this
-            // platform, ruling out that flag as a way to detect "still
-            // minimized" too. So this now also reacts to
-            // SDL_WINDOWEVENT_FOCUS_GAINED - reliably delivered by any
-            // Dock-icon click - gated on our *own* minimized-bool
-            // bookkeeping (mainMinimized/eqMinimized/plMinimized/
-            // infoMinimized, set only by this same code, never read from
-            // an SDL flag) rather than SDL's state, so an ordinary click
-            // on an already-visible window can't misfire this.
-            //
-            // userVisible gates which windows are even eligible - a
-            // window the user closed on purpose stays closed regardless
-            // of what Main or anything else does. Main has no user-hide
-            // concept (only Close, which quits), so it's always eligible.
-            // "Maximize" (the repurposed LitePic triangle - see
-            // toggleMaximize) has its own independent show/hide logic and
-            // isn't part of this cascade.
             struct Target {
                 SDL_Window* win;
                 bool* minimized;
@@ -3406,18 +3537,30 @@ int main(int argc, char** argv) {
             for (Target* t : all) {
                 if (SDL_GetWindowID(t->win) == ev.window.windowID) triggered = t;
             }
-            if (triggered) {
+            constexpr Uint32 kFocusGainedDebounceMs = 500;
+            const bool debouncedFocusGained = ev.window.event == SDL_WINDOWEVENT_FOCUS_GAINED &&
+                                               SDL_GetTicks() - lastCascadeMinimizeMs < kFocusGainedDebounceMs;
+            if (triggered && !debouncedFocusGained) {
                 if (ev.window.event == SDL_WINDOWEVENT_MINIMIZED) {
                     *triggered->minimized = true;
+                    lastCascadeMinimizeMs = SDL_GetTicks();
+                    // Secondary windows are cascade-hidden (SDL_HideWindow),
+                    // not minimized (SDL_MinimizeWindow) - see the restore
+                    // branch below for why: two live traces on this
+                    // platform proved a *minimized* secondary window can
+                    // never be programmatically un-minimized again, only
+                    // hide/show sidesteps that. Only Main ever goes through
+                    // a real WM minimize (below), so it's the only window
+                    // that can genuinely be `triggered` here in practice.
                     for (Target* t : all) {
                         if (t == triggered || !t->userVisible) continue;
                         *t->minimized = true;
-                        SDL_MinimizeWindow(t->win);
+                        SDL_HideWindow(t->win);
                     }
                 } else if (*triggered->minimized) {
-                    // RESTORED or FOCUS_GAINED, and we believed this
-                    // window was minimized - a real "coming back" event,
-                    // not just an ordinary click/focus.
+                    // RESTORED or a non-debounced FOCUS_GAINED, and we
+                    // believed this window was minimized - a real "coming
+                    // back" event.
                     *triggered->minimized = false;
                     // Fixed restore order (Info, Playlist, EQ, then Main
                     // last) - the user found the resulting stacking
@@ -3427,19 +3570,51 @@ int main(int argc, char** argv) {
                     // actually triggered the cascade (harmless no-op if
                     // it's already frontmost, e.g. when Main itself was
                     // the trigger), so it always ends up on top rather
-                    // than wherever the clicked Dock icon happened to
-                    // leave it.
+                    // than wherever the restored window happened to leave
+                    // it.
+                    //
+                    // SDL_ShowWindow, not SDL_RestoreWindow: confirmed via
+                    // two live window-event traces that a secondary window
+                    // programmatically told to SDL_RestoreWindow from here
+                    // (i.e. not in direct response to the user's own input
+                    // on that specific window) never actually comes back -
+                    // not slow, genuinely never, even after 20+ seconds.
+                    // That's consistent with Wayland/Mutter's focus-
+                    // stealing prevention refusing an unminimize request
+                    // that isn't tied to a fresh user gesture on the
+                    // target window itself. SDL_ShowWindow isn't subject
+                    // to that same policy (it's how the macOS tray-hide
+                    // path above already shows/hides these same windows,
+                    // just for a different reason there) and mirrors
+                    // exactly how the secondary windows are cascade-hidden
+                    // above rather than minimized, so plMinimized/eqMinimized/
+                    // etc. never actually reach a real WM-minimized state
+                    // that only a user click on *that* window could undo.
                     Target* restoreOrder[] = {&aboutT, &infoT, &plT, &eqT};
                     for (Target* t : restoreOrder) {
                         if (t == triggered || !t->userVisible || !*t->minimized) continue;
                         *t->minimized = false;
-                        SDL_RestoreWindow(t->win);
+                        SDL_ShowWindow(t->win);
+                        // Same fix as applyUiScale's rescale case above
+                        // (see its comment): these three windows only
+                        // redraw+present when their memoized content key
+                        // changes, and none of those keys factor in
+                        // shown/hidden - so without forcing them dirty
+                        // here, a hide/show cycle leaves SDL correctly
+                        // reporting the window as shown while its backing
+                        // buffer is whatever stale/blank content it had
+                        // from before being hidden, never re-presented.
+                        if (t->win == eqWindow) lastEqKey.reset();
+                        else if (t->win == plWindow) lastPlKey.reset();
+                        else if (t->win == infoWindow) lastInfoKey.reset();
+                        else if (t->win == aboutWindow) aboutDrawnOnce = false;
                     }
                     mainMinimized = false;
                     SDL_RestoreWindow(window);
                     SDL_RaiseWindow(window);
                 }
             }
+        }
 #endif
 
         if (ev.type == SDL_MOUSEBUTTONDOWN && ev.button.button == SDL_BUTTON_LEFT) {
@@ -3468,6 +3643,53 @@ int main(int argc, char** argv) {
 
             const int lx = static_cast<int>(ev.button.x / scale), ly = static_cast<int>(ev.button.y / scale);
             if (ev.button.windowID == mainWindowID) {
+#ifndef __APPLE__
+                // Linux twins of the macOS View/Effects NSMenu items - same
+                // "any click while open closes it, click-inside dispatches"
+                // convention as ejectMenuOpen just below, checked first for
+                // the same reason (a popup overlapping other controls must
+                // intercept every click while open, never fall through).
+                if (viewMenuOpen) {
+                    viewMenuOpen = false;
+                    if (inRect(lx, ly, kViewMenuX, kViewMenuY, kViewMenuW, kViewMenuH)) {
+                        constexpr int kMaxIdx = static_cast<int>(std::size(kUiScaleLevels)) - 1;
+                        int curIdx = 0;
+                        for (int i = 0; i <= kMaxIdx; ++i) {
+                            if (kUiScaleLevels[i] == uiScalePercent) curIdx = i;
+                        }
+                        const int item = (ly - kViewMenuY) / kViewMenuItemH;
+                        switch (item) {
+                            case 0: applyUiScale(100); break;
+                            case 1: applyUiScale(200); break;
+                            case 2: applyUiScale(300); break;
+                            case 3: applyUiScale(400); break;
+                            case 4: applyUiScale(kUiScaleLevels[std::min(curIdx + 1, kMaxIdx)]); break; // Zoom In
+                            case 5: applyUiScale(kUiScaleLevels[std::max(curIdx - 1, 0)]); break;       // Zoom Out
+                            case 6: applyUiScale(100); break;                                           // Reset
+                        }
+                    }
+                } else if (effectsMenuOpen) {
+                    effectsMenuOpen = false;
+                    if (inRect(lx, ly, kEffectsMenuX, kEffectsMenuY, kEffectsMenuW, kEffectsMenuH)) {
+                        const int item = (ly - kEffectsMenuY) / kEffectsMenuItemH;
+                        switch (item) {
+                            case 0: toggleXSound(); break;
+                            case 1: toggleReverb(); break;
+                            case 2: toggleSaturation(); break;
+                            case 3: toggleCompression(); break;
+                            case 4: toggleChorus(); break;
+                        }
+                    }
+                } else if (inRect(lx, ly, kViewToggleX, kViewToggleY, kViewToggleW, kViewToggleH)) {
+                    viewMenuOpen = true;
+                    effectsMenuOpen = false;
+                    ejectMenuOpen = false;
+                } else if (inRect(lx, ly, kEffectsToggleX, kEffectsToggleY, kEffectsToggleW, kEffectsToggleH)) {
+                    effectsMenuOpen = true;
+                    viewMenuOpen = false;
+                    ejectMenuOpen = false;
+                } else
+#endif
                 if (ejectMenuOpen) {
                     // Mirrors the Playlist window's Save-menu pattern: any
                     // click while open closes it, whether or not it landed
@@ -3674,8 +3896,19 @@ int main(int argc, char** argv) {
         // real Dock-icon clicks were confirmed to reliably deliver.
         fire(window, SDL_WINDOWEVENT_MINIMIZED);
         report("after Main MINIMIZED (again)");
+        // Bug (3), also found on the user's real machine: FOCUS_GAINED
+        // alone was *too* eager - it also fires as a side effect of the
+        // cascade minimize just above (shifting focus onto whichever
+        // window closes next), which made every minimize immediately pop
+        // back up. The real fix debounces FOCUS_GAINED within
+        // kFocusGainedDebounceMs of our own cascade minimize; sleeping
+        // past that window here is what makes this Info FOCUS_GAINED
+        // resemble the genuine, later, real-click case that debounce is
+        // meant to still let through, rather than the immediate self-
+        // inflicted one it's meant to suppress.
+        SDL_Delay(600);
         fire(infoWindow, SDL_WINDOWEVENT_FOCUS_GAINED);
-        report("after Info FOCUS_GAINED");
+        report("after Info FOCUS_GAINED (after debounce window)");
     }
 
     if (simClickSpecModeCount > 0) {
@@ -3845,10 +4078,6 @@ int main(int argc, char** argv) {
     // notifyNowPlayingChanged is permanently the default do-nothing
     // lambda.
     Uint32 lastNowPlayingRefresh = 0;
-    std::optional<PlaylistFrameKey> lastPlKey;
-    std::optional<EqFrameKey> lastEqKey;
-    std::optional<InfoFrameKey> lastInfoKey;
-    bool aboutDrawnOnce = false;
     while (running && (autoAdvanceDeadline == 0 || SDL_GetTicks() < autoAdvanceDeadline)) {
         const Uint32 frameStart = SDL_GetTicks();
 

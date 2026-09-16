@@ -76,6 +76,31 @@ constexpr int kDragStripH = 20;
 constexpr int kPlToggleX = 240, kPlToggleY = 130, kPlToggleW = 36, kPlToggleH = 14;
 constexpr int kEqToggleX = 280, kEqToggleY = 130, kEqToggleW = 36, kEqToggleH = 14;
 
+// Linux-only View/Effects dropdown triggers (Linux has no native menu bar
+// to append "View"/"Effects" items onto the way app/main_menu.h does on
+// macOS - see main.cpp's #ifndef __APPLE__ handling - so these are a
+// same-row, same-size twin of kPlToggle/kEqToggle above, sitting in the
+// gap between the peak meter (kPeakX+kPeakW=121 below) and kPlToggleX.
+constexpr int kViewToggleX = 160, kViewToggleY = 130, kViewToggleW = 36, kViewToggleH = 14;
+constexpr int kEffectsToggleX = 200, kEffectsToggleY = 130, kEffectsToggleW = 36, kEffectsToggleH = 14;
+
+// Their dropdowns: same chrome/geometry convention as kEjectMenu* above,
+// opening upward from the toggle row (like the Eject menu opens upward
+// from the transport row) into the space above it.
+constexpr int kViewMenuItemH = 12;
+constexpr int kViewMenuItems = 7; // 100%, 200%, 300%, 400%, Zoom In, Zoom Out, Reset
+constexpr int kViewMenuW = 64;
+constexpr int kViewMenuH = kViewMenuItemH * kViewMenuItems;
+constexpr int kViewMenuX = kViewToggleX;
+constexpr int kViewMenuY = kViewToggleY - kViewMenuH;
+
+constexpr int kEffectsMenuItemH = 12;
+constexpr int kEffectsMenuItems = 5; // xSound, Reverb, Saturation, Compression, Chorus
+constexpr int kEffectsMenuW = 76;
+constexpr int kEffectsMenuH = kEffectsMenuItemH * kEffectsMenuItems;
+constexpr int kEffectsMenuX = kEffectsToggleX;
+constexpr int kEffectsMenuY = kEffectsToggleY - kEffectsMenuH;
+
 // xmDisplay(0)/(1): title marquee and status line.
 constexpr int kMarqueeX = 16, kMarqueeY = 26, kDisplayFieldW = 278;
 constexpr int kStatusX = 16, kStatusY = 35;
