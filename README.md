@@ -5,6 +5,18 @@ This project is a recoding from scratch using the original assets and source cod
 
 Fair Warning: I stopped being a developer a while ago so for this project I used Claude Code. So be warned, this is mostly vibe coded.
 
+## Building
+
+- macOS: `./scripts/build-macos.sh` - checks for Xcode Command Line Tools and
+  SDL2 (installing SDL2 via Homebrew if missing), runs the test suite, and
+  produces `build/X.MaD-Player-Revival-<version>.dmg`.
+- Linux: `./scripts/build-linux.sh` - checks for a C++ compiler, `make`,
+  `pkg-config`, and SDL2 (installing anything missing via apt/dnf/pacman),
+  runs the test suite, and produces `build/X.MaD-Player-Revival-<version>-linux-<arch>.tar.gz`.
+
+For iterative development, the underlying `make`, `make test`, and `make run`
+targets remain available directly.
+
 ## License
 
 GPL-3.0 - see [LICENSE](LICENSE).
