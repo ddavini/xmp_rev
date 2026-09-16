@@ -1,9 +1,0 @@
-[Desktop Entry]
-Type=Application
-Name=X.MaD Player Revival
-Comment=Winamp-style music player
-Exec=@EXEC@
-Icon=@ICON@
-Terminal=false
-Categories=AudioVideo;Audio;Player;
-StartupWMClass=xmad
