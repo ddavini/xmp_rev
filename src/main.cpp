@@ -762,6 +762,12 @@ int main(int argc, char** argv) {
     // marked minimized can trigger the cascade back out.
     bool mainMinimized = false, eqMinimized = false, plMinimized = false, infoMinimized = false,
          aboutMinimized = false;
+#ifndef __APPLE__
+    // Timestamp of the last time our own minimize cascade (below) called
+    // SDL_MinimizeWindow on a *secondary* window - see its use in the
+    // restore branch for why.
+    Uint32 lastCascadeMinimizeMs = 0;
+#endif
 #ifdef __APPLE__
     // Separate from the per-window *Minimized bools above: those can each
     // flip multiple times during one user minimize/restore action (every
@@ -3484,71 +3490,38 @@ int main(int argc, char** argv) {
             }
         }
 #else
+        // TODO: "when the main window is minimized or maximized all the
+        // windows should minimize or maximize". Symmetric across all four
+        // windows, not just Main: each is a genuinely separate top-level
+        // window, but only Main is ever genuinely WM-minimized on this
+        // platform - EQ/Playlist/Info/About are cascade-hidden/shown
+        // instead (see the MINIMIZED/restore branches below for why), so
+        // in practice only Main's own taskbar entry drives this cascade;
+        // the others simply disappear/reappear with it as a unit.
+        //
+        // Listens for both SDL_WINDOWEVENT_RESTORED and FOCUS_GAINED as
+        // restore triggers for whichever window *is* genuinely minimized
+        // (Main): three rounds of live testing on this platform found
+        // RESTORED alone isn't always delivered (FOCUS_GAINED is more
+        // consistent), but plain FOCUS_GAINED alone is *too* eager - it
+        // also fires as a side effect of the cascade's own SDL_HideWindow
+        // calls just below shifting focus around, which made every
+        // minimize immediately pop back up. lastCascadeMinimizeMs
+        // debounces just that self-inflicted case - a FOCUS_GAINED within
+        // kFocusGainedDebounceMs of our own cascade is presumed to be that
+        // side effect, not a real user restore; RESTORED is trusted
+        // unconditionally since it never misfired in testing, only
+        // under-fired.
+        //
+        // userVisible gates which windows are even eligible - a window
+        // the user closed on purpose stays closed regardless of what Main
+        // or anything else does. Main has no user-hide concept (only
+        // Close, which quits), so it's always eligible. "Maximize" (the
+        // repurposed LitePic triangle - see toggleMaximize) has its own
+        // independent show/hide logic and isn't part of this cascade.
         if (ev.type == SDL_WINDOWEVENT && (ev.window.event == SDL_WINDOWEVENT_MINIMIZED ||
                                             ev.window.event == SDL_WINDOWEVENT_RESTORED ||
                                             ev.window.event == SDL_WINDOWEVENT_FOCUS_GAINED)) {
-            // TODO: "when the main window is minimized or maximized all
-            // the windows should minimize or maximize". Symmetric across
-            // all four windows, not just Main: each is a genuinely
-            // separate top-level window, so on macOS each gets its own
-            // Dock icon once minimized, and restoring *any one* of those
-            // icons must bring the rest back too.
-            //
-            // Two real-machine-only bugs already found and fixed here:
-            // (1) an earlier version only listened on Main, so restoring
-            // via any other window's Dock icon restored just that one.
-            // (2) after fixing that, restoring via a *secondary* window's
-            // Dock icon still didn't cascade - SDL_WINDOWEVENT_RESTORED
-            // was only ever observed to actually arrive for Main; testing
-            // also separately confirmed SDL_MinimizeWindow sets
-            // SDL_WINDOW_HIDDEN alongside SDL_WINDOW_MINIMIZED on this
-            // platform, ruling out that flag as a way to detect "still
-            // minimized" too. So this now also reacts to
-            // SDL_WINDOWEVENT_FOCUS_GAINED - reliably delivered by any
-            // Dock-icon click - gated on our *own* minimized-bool
-            // bookkeeping (mainMinimized/eqMinimized/plMinimized/
-            // infoMinimized, set only by this same code, never read from
-            // an SDL flag) rather than SDL's state, so an ordinary click
-            // on an already-visible window can't misfire this.
-            //
-            // userVisible gates which windows are even eligible - a
-            // window the user closed on purpose stays closed regardless
-            // of what Main or anything else does. Main has no user-hide
-            // concept (only Close, which quits), so it's always eligible.
-            // "Maximize" (the repurposed LitePic triangle - see
-            // toggleMaximize) has its own independent show/hide logic and
-            // isn't part of this cascade.
-            // TODO: "when the main window is minimized or maximized all
-            // the windows should minimize or maximize". Symmetric across
-            // all four windows, not just Main: each is a genuinely
-            // separate top-level window, so on macOS each gets its own
-            // Dock icon once minimized, and restoring *any one* of those
-            // icons must bring the rest back too.
-            //
-            // Two real-machine-only bugs already found and fixed here:
-            // (1) an earlier version only listened on Main, so restoring
-            // via any other window's Dock icon restored just that one.
-            // (2) after fixing that, restoring via a *secondary* window's
-            // Dock icon still didn't cascade - SDL_WINDOWEVENT_RESTORED
-            // was only ever observed to actually arrive for Main; testing
-            // also separately confirmed SDL_MinimizeWindow sets
-            // SDL_WINDOW_HIDDEN alongside SDL_WINDOW_MINIMIZED on this
-            // platform, ruling out that flag as a way to detect "still
-            // minimized" too. So this now also reacts to
-            // SDL_WINDOWEVENT_FOCUS_GAINED - reliably delivered by any
-            // Dock-icon click - gated on our *own* minimized-bool
-            // bookkeeping (mainMinimized/eqMinimized/plMinimized/
-            // infoMinimized, set only by this same code, never read from
-            // an SDL flag) rather than SDL's state, so an ordinary click
-            // on an already-visible window can't misfire this.
-            //
-            // userVisible gates which windows are even eligible - a
-            // window the user closed on purpose stays closed regardless
-            // of what Main or anything else does. Main has no user-hide
-            // concept (only Close, which quits), so it's always eligible.
-            // "Maximize" (the repurposed LitePic triangle - see
-            // toggleMaximize) has its own independent show/hide logic and
-            // isn't part of this cascade.
             struct Target {
                 SDL_Window* win;
                 bool* minimized;
@@ -3564,18 +3537,30 @@ int main(int argc, char** argv) {
             for (Target* t : all) {
                 if (SDL_GetWindowID(t->win) == ev.window.windowID) triggered = t;
             }
-            if (triggered) {
+            constexpr Uint32 kFocusGainedDebounceMs = 500;
+            const bool debouncedFocusGained = ev.window.event == SDL_WINDOWEVENT_FOCUS_GAINED &&
+                                               SDL_GetTicks() - lastCascadeMinimizeMs < kFocusGainedDebounceMs;
+            if (triggered && !debouncedFocusGained) {
                 if (ev.window.event == SDL_WINDOWEVENT_MINIMIZED) {
                     *triggered->minimized = true;
+                    lastCascadeMinimizeMs = SDL_GetTicks();
+                    // Secondary windows are cascade-hidden (SDL_HideWindow),
+                    // not minimized (SDL_MinimizeWindow) - see the restore
+                    // branch below for why: two live traces on this
+                    // platform proved a *minimized* secondary window can
+                    // never be programmatically un-minimized again, only
+                    // hide/show sidesteps that. Only Main ever goes through
+                    // a real WM minimize (below), so it's the only window
+                    // that can genuinely be `triggered` here in practice.
                     for (Target* t : all) {
                         if (t == triggered || !t->userVisible) continue;
                         *t->minimized = true;
-                        SDL_MinimizeWindow(t->win);
+                        SDL_HideWindow(t->win);
                     }
                 } else if (*triggered->minimized) {
-                    // RESTORED or FOCUS_GAINED, and we believed this
-                    // window was minimized - a real "coming back" event,
-                    // not just an ordinary click/focus.
+                    // RESTORED or a non-debounced FOCUS_GAINED, and we
+                    // believed this window was minimized - a real "coming
+                    // back" event.
                     *triggered->minimized = false;
                     // Fixed restore order (Info, Playlist, EQ, then Main
                     // last) - the user found the resulting stacking
@@ -3585,13 +3570,44 @@ int main(int argc, char** argv) {
                     // actually triggered the cascade (harmless no-op if
                     // it's already frontmost, e.g. when Main itself was
                     // the trigger), so it always ends up on top rather
-                    // than wherever the clicked Dock icon happened to
-                    // leave it.
+                    // than wherever the restored window happened to leave
+                    // it.
+                    //
+                    // SDL_ShowWindow, not SDL_RestoreWindow: confirmed via
+                    // two live window-event traces that a secondary window
+                    // programmatically told to SDL_RestoreWindow from here
+                    // (i.e. not in direct response to the user's own input
+                    // on that specific window) never actually comes back -
+                    // not slow, genuinely never, even after 20+ seconds.
+                    // That's consistent with Wayland/Mutter's focus-
+                    // stealing prevention refusing an unminimize request
+                    // that isn't tied to a fresh user gesture on the
+                    // target window itself. SDL_ShowWindow isn't subject
+                    // to that same policy (it's how the macOS tray-hide
+                    // path above already shows/hides these same windows,
+                    // just for a different reason there) and mirrors
+                    // exactly how the secondary windows are cascade-hidden
+                    // above rather than minimized, so plMinimized/eqMinimized/
+                    // etc. never actually reach a real WM-minimized state
+                    // that only a user click on *that* window could undo.
                     Target* restoreOrder[] = {&aboutT, &infoT, &plT, &eqT};
                     for (Target* t : restoreOrder) {
                         if (t == triggered || !t->userVisible || !*t->minimized) continue;
                         *t->minimized = false;
-                        SDL_RestoreWindow(t->win);
+                        SDL_ShowWindow(t->win);
+                        // Same fix as applyUiScale's rescale case above
+                        // (see its comment): these three windows only
+                        // redraw+present when their memoized content key
+                        // changes, and none of those keys factor in
+                        // shown/hidden - so without forcing them dirty
+                        // here, a hide/show cycle leaves SDL correctly
+                        // reporting the window as shown while its backing
+                        // buffer is whatever stale/blank content it had
+                        // from before being hidden, never re-presented.
+                        if (t->win == eqWindow) lastEqKey.reset();
+                        else if (t->win == plWindow) lastPlKey.reset();
+                        else if (t->win == infoWindow) lastInfoKey.reset();
+                        else if (t->win == aboutWindow) aboutDrawnOnce = false;
                     }
                     mainMinimized = false;
                     SDL_RestoreWindow(window);
@@ -3880,8 +3896,19 @@ int main(int argc, char** argv) {
         // real Dock-icon clicks were confirmed to reliably deliver.
         fire(window, SDL_WINDOWEVENT_MINIMIZED);
         report("after Main MINIMIZED (again)");
+        // Bug (3), also found on the user's real machine: FOCUS_GAINED
+        // alone was *too* eager - it also fires as a side effect of the
+        // cascade minimize just above (shifting focus onto whichever
+        // window closes next), which made every minimize immediately pop
+        // back up. The real fix debounces FOCUS_GAINED within
+        // kFocusGainedDebounceMs of our own cascade minimize; sleeping
+        // past that window here is what makes this Info FOCUS_GAINED
+        // resemble the genuine, later, real-click case that debounce is
+        // meant to still let through, rather than the immediate self-
+        // inflicted one it's meant to suppress.
+        SDL_Delay(600);
         fire(infoWindow, SDL_WINDOWEVENT_FOCUS_GAINED);
-        report("after Info FOCUS_GAINED");
+        report("after Info FOCUS_GAINED (after debounce window)");
     }
 
     if (simClickSpecModeCount > 0) {
