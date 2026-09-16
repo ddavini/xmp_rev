@@ -444,6 +444,68 @@ std::string ResolveDefaultAssetDir() {
     return "assets/skin";
 }
 
+#ifndef __APPLE__
+// Silently (re)installs ~/.local/share/applications/xmad.desktop on every
+// Linux launch, self-locating via ExecutableDir() so Exec=/Icon= always
+// point at wherever this binary actually is right now - a moved checkout,
+// a tarball extracted anywhere, whatever. No separate install step for the
+// user: this just runs as a normal part of starting the app, same as the
+// SDL_VIDEODRIVER=x11 forcing above.
+//
+// Turns out to be necessary, not just nice-to-have: confirmed this session
+// that GNOME Shell's own chrome (Dash, Alt-Tab, Activities overview) shows
+// the generic icon regardless of what SDL_SetWindowIcon below actually
+// writes into _NET_WM_ICON (verified with real, correctly-sized pixel data
+// present via xprop) - unlike a traditional X11 window manager, GNOME
+// Shell resolves icons for its own UI through Shell.App, which needs an
+// installed .desktop file matched by StartupWMClass/app_id (see the
+// SDL_VIDEO_X11_WMCLASS hint above, set to "xmad" to match StartupWMClass
+// below) and won't fall back to a bare window's own icon at all.
+void InstallDesktopIntegration(const std::string& assetDir) {
+    try {
+        const std::string exeDir = ExecutableDir();
+        if (exeDir.empty()) return;
+        const std::string exePath = exeDir + "/xmad";
+
+        // Same assetDir-relative convention the BMP icon load below already
+        // uses (assetDir + "/../icon/...") - correct for both the flat
+        // tarball layout (assetDir = <exeDir>/skin) and the dev checkout
+        // (assetDir = "assets/skin", relative to the repo root).
+        const std::filesystem::path iconPng =
+            std::filesystem::absolute(std::filesystem::path(assetDir) / ".." / "icon" / "app_icon.png").lexically_normal();
+        if (!std::filesystem::exists(iconPng)) return;
+
+        const std::filesystem::path absAssetDir = std::filesystem::absolute(assetDir).lexically_normal();
+
+        const char* home = std::getenv("HOME");
+        if (!home || !*home) return;
+        const std::filesystem::path appsDir = std::filesystem::path(home) / ".local/share/applications";
+        std::filesystem::create_directories(appsDir);
+
+        std::ofstream f(appsDir / "xmad.desktop", std::ios::trunc);
+        if (!f) return;
+        f << "[Desktop Entry]\n"
+             "Type=Application\n"
+             "Name=X.MaD Player Revival\n"
+             "Comment=Winamp-style music player\n"
+             "Exec=\"" << exePath << "\" \"" << absAssetDir.string() << "\"\n"
+             "Icon=" << iconPng.string() << "\n"
+             "Terminal=false\n"
+             "Categories=AudioVideo;Audio;Player;\n"
+             "StartupWMClass=xmad\n";
+        f.close();
+
+        // Best-effort: some desktop environments need this to notice a new
+        // .desktop file, others don't; either way isn't worth surfacing.
+        const int rc = std::system(("update-desktop-database \"" + appsDir.string() + "\" >/dev/null 2>&1").c_str());
+        (void)rc;
+    } catch (const std::exception&) {
+        // Not fatal - worst case, the generic icon in GNOME's Dash/
+        // Alt-Tab, same as before this change.
+    }
+}
+#endif
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -560,26 +622,46 @@ int main(int argc, char** argv) {
     SDL_SetHint(SDL_HINT_MOUSE_FOCUS_CLICKTHROUGH, "1");
 
 #ifndef __APPLE__
-    // Sets the Wayland app_id / X11 WM_CLASS (no #define constant for
-    // these particular hint names ships in this SDL2 version's own
-    // headers, but the strings themselves are recognized by the library -
-    // confirmed via `strings` on libSDL2.so) to "xmad", matching
-    // StartupWMClass in assets/icon/xmad.desktop.in (installed by `make
-    // run`/`make install-desktop` - see the Makefile). Without this, the
-    // window manager has no reliable way to associate a running window
-    // with that .desktop entry - and therefore no taskbar/Alt-Tab icon -
-    // since Wayland's core protocol has no API for a client to set its
-    // own icon at runtime the way X11's _NET_WM_ICON does; SDL_SetWindowIcon
-    // below is a silent no-op under native Wayland for exactly that reason
-    // (kept anyway since it *does* work when this same binary happens to
-    // run under X11/XWayland instead).
-    SDL_SetHint("SDL_VIDEO_WAYLAND_WMCLASS", "xmad");
+    // Sets the X11 WM_CLASS (no #define constant for this particular hint
+    // name ships in this SDL2 version's own headers, but the string itself
+    // is recognized by the library - confirmed via `strings` on
+    // libSDL2.so) to "xmad", matching StartupWMClass in the .desktop entry
+    // InstallDesktopIntegration writes below.
     SDL_SetHint("SDL_VIDEO_X11_WMCLASS", "xmad");
+
+    // Routes through XWayland instead of native Wayland on a Wayland
+    // session: SDL_SetWindowIcon below (BuildIconSurface + app_icon.bmp)
+    // is a real no-op under native Wayland - the protocol has no client
+    // API for a window to set its own icon at runtime - but works for
+    // real, at runtime, under X11/XWayland via _NET_WM_ICON. Kept even
+    // though it alone turned out not to be enough for GNOME Shell
+    // specifically (see InstallDesktopIntegration below): it's still what
+    // makes a plain X11 window manager, or anything else that reads a
+    // window's own icon property directly, show the right icon. setenv's
+    // 3rd arg is 0 so an explicit SDL_VIDEODRIVER the user already set
+    // (e.g. forcing native Wayland on purpose) is never overridden.
+    setenv("SDL_VIDEODRIVER", "x11", 0);
+
+    // Belt-and-suspenders for GNOME Shell's Dash/Alt-Tab/Activities
+    // overview, which - confirmed this session - ignore a bare window's
+    // _NET_WM_ICON entirely and only resolve a custom icon through an
+    // installed .desktop file. See InstallDesktopIntegration's own comment
+    // for the full story.
+    InstallDesktopIntegration(assetDir);
 #endif
 
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) != 0) {
-        std::cerr << "SDL_Init failed: " << SDL_GetError() << "\n";
-        return 1;
+#ifndef __APPLE__
+        // XWayland isn't available on this system - fall back to SDL's
+        // normal driver auto-detection (native Wayland) rather than
+        // failing to start; the taskbar icon just won't show, same as
+        // before this change.
+        unsetenv("SDL_VIDEODRIVER");
+#endif
+        if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) != 0) {
+            std::cerr << "SDL_Init failed: " << SDL_GetError() << "\n";
+            return 1;
+        }
     }
 
 #ifdef __APPLE__
@@ -783,7 +865,11 @@ int main(int argc, char** argv) {
     // that same AppIcon.icns, so the taskbar/alt-tab icon matches across
     // platforms. All five windows get their own taskbar entry (confirmed
     // while fixing minimize/restore above), so all five need it set, not
-    // just Main.
+    // just Main. Deliberately 128x128, not the 256x256 the .icns can also
+    // provide: confirmed on this session's GNOME/XWayland that
+    // SDL_SetWindowIcon silently writes an empty _NET_WM_ICON (no error,
+    // just zero data - the taskbar/alt-tab icon never shows) for anything
+    // much above ~240px square, while 128 and below work every time.
     try {
         const gfx::Image iconImg = gfx::LoadBMP(assetDir + "/../icon/app_icon.bmp");
         if (SDL_Surface* iconSurf = BuildIconSurface(iconImg)) {

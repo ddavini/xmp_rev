@@ -234,6 +234,9 @@ tarball: test $(BUILD)/xmad
 	mkdir -p "$(TARBALL_STAGING)/$(TARBALL_DIR)"
 	cp $(BUILD)/xmad "$(TARBALL_STAGING)/$(TARBALL_DIR)/xmad"
 	cp -R assets/skin "$(TARBALL_STAGING)/$(TARBALL_DIR)/skin"
+	mkdir -p "$(TARBALL_STAGING)/$(TARBALL_DIR)/icon"
+	cp assets/icon/app_icon.bmp "$(TARBALL_STAGING)/$(TARBALL_DIR)/icon/app_icon.bmp"
+	cp assets/icon/app_icon.png "$(TARBALL_STAGING)/$(TARBALL_DIR)/icon/app_icon.png"
 	tar -C "$(TARBALL_STAGING)" -czf "$(BUILD)/$(TARBALL_NAME)" "$(TARBALL_DIR)"
 	rm -rf "$(TARBALL_STAGING)"
 	@echo "Wrote $(BUILD)/$(TARBALL_NAME)"
@@ -266,29 +269,19 @@ ifeq ($(UNAME_S),Darwin)
 run: app
 	open "$(APP_BUNDLE)" --args assets/skin tests/fixtures/track_a.mp3 tests/fixtures/track_b.mp3 tests/fixtures/track_c.flac
 else
-# Local desktop integration so `make run`'s taskbar/Alt-Tab icon actually
-# shows: unlike macOS's .app bundle (CFBundleIconFile, read once at
-# launch by the OS), Wayland's core protocol has no API for a client to
-# set its own icon at runtime - the window manager instead matches a
-# running window to a .desktop file via StartupWMClass/app_id (see
-# main.cpp's SDL_VIDEO_WAYLAND_WMCLASS hint, set to "xmad" to match this)
-# and reads that file's Icon= line. Installed to the user's own
-# ~/.local/share/applications only, never anything system-wide; re-run
-# `make install-desktop` (or just `make run`, which depends on it) any
-# time the repo moves, since Exec=/Icon= below are baked in as absolute
-# paths for this exact checkout.
-DESKTOP_FILE := $(HOME)/.local/share/applications/xmad.desktop
-
-.PHONY: install-desktop
-install-desktop: assets/icon/xmad.desktop.in
-	@mkdir -p "$(HOME)/.local/share/applications"
-	@sed -e 's|@EXEC@|$(CURDIR)/$(BUILD)/xmad $(CURDIR)/assets/skin|' \
-	     -e 's|@ICON@|$(CURDIR)/assets/icon/app_icon.png|' \
-	     assets/icon/xmad.desktop.in > "$(DESKTOP_FILE)"
-	@command -v update-desktop-database >/dev/null 2>&1 && \
-	  update-desktop-database "$(HOME)/.local/share/applications" >/dev/null 2>&1 || true
-
-run: $(BUILD)/xmad install-desktop
+# No manual desktop-integration step for the taskbar/Alt-Tab icon: the
+# binary itself (main.cpp's InstallDesktopIntegration, run on every Linux
+# launch) writes ~/.local/share/applications/xmad.desktop pointing at
+# wherever it's actually running from, self-located via /proc/self/exe -
+# works from any location (this checkout, a moved checkout, or a tarball
+# extracted elsewhere) with no separate install command to remember. Also
+# forces the X11 SDL video driver (routes through XWayland on a Wayland
+# session) so SDL_SetWindowIcon's _NET_WM_ICON works for window managers
+# that read it directly - GNOME Shell's own Dash/Alt-Tab/Activities
+# overview turn out not to be among them (confirmed this session: they
+# ignore a bare window's icon property entirely), which is what makes the
+# self-installed .desktop file necessary, not just belt-and-suspenders.
+run: $(BUILD)/xmad
 	./$(BUILD)/xmad assets/skin tests/fixtures/track_a.mp3 tests/fixtures/track_b.mp3 tests/fixtures/track_c.flac
 endif
 
