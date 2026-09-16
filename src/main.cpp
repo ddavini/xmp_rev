@@ -569,7 +569,7 @@ int main(int argc, char** argv) {
     app::EnableMediaRemoteCommands(kMediaRemoteEventType);
 
     // TODO: "Add a setting for UI scale / text+button size" - the View
-    // menu's 100/125/150% items and Zoom In/Out/Reset (Cmd+/Cmd-/Cmd+0)
+    // menu's 100/200/300/400% items and Zoom In/Out/Reset (Cmd+/Cmd-/Cmd+0)
     // push this event, consumed in processEvent below via applyUiScale.
     // Installed onto NSApp's existing mainMenu (see main_menu.h) rather
     // than a from-scratch menu bar.
@@ -3472,8 +3472,9 @@ int main(int argc, char** argv) {
             }
             switch (static_cast<app::UiScaleMenuAction>(ev.user.code)) {
                 case app::UiScaleMenuAction::Set100: applyUiScale(100); break;
-                case app::UiScaleMenuAction::Set125: applyUiScale(125); break;
-                case app::UiScaleMenuAction::Set150: applyUiScale(150); break;
+                case app::UiScaleMenuAction::Set200: applyUiScale(200); break;
+                case app::UiScaleMenuAction::Set300: applyUiScale(300); break;
+                case app::UiScaleMenuAction::Set400: applyUiScale(400); break;
                 case app::UiScaleMenuAction::ZoomIn: applyUiScale(kUiScaleLevels[std::min(idx + 1, kMaxIdx)]); break;
                 case app::UiScaleMenuAction::ZoomOut: applyUiScale(kUiScaleLevels[std::max(idx - 1, 0)]); break;
                 case app::UiScaleMenuAction::Reset: applyUiScale(100); break;

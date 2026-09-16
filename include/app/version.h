@@ -6,6 +6,6 @@
 
 namespace xmad::app {
 
-constexpr const char* kVersion = "1.2.46";
+constexpr const char* kVersion = "1.2.47";
 
 } // namespace xmad::app

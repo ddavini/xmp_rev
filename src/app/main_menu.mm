@@ -36,8 +36,9 @@ XmadMenuActionTarget* gTarget = nil;
 // SetUiScaleMenuChecked/SetEffectsMenuChecked below can keep all of
 // them in sync with a single call.
 std::vector<NSMenuItem*> g100Items;
-std::vector<NSMenuItem*> g125Items;
-std::vector<NSMenuItem*> g150Items;
+std::vector<NSMenuItem*> g200Items;
+std::vector<NSMenuItem*> g300Items;
+std::vector<NSMenuItem*> g400Items;
 
 XmadMenuActionTarget* gEffectsTarget = nil;
 // Keyed by EffectsMenuAction tag; one entry per built instance of each
@@ -69,16 +70,18 @@ NSMenu* BuildViewMenu(uint32_t scaleEventType) {
 
         NSMenu* viewMenu = [[NSMenu alloc] initWithTitle:@"View"];
         NSMenuItem* i100 = addItem(viewMenu, @"100%", @"", static_cast<int>(UiScaleMenuAction::Set100));
-        NSMenuItem* i125 = addItem(viewMenu, @"125%", @"", static_cast<int>(UiScaleMenuAction::Set125));
-        NSMenuItem* i150 = addItem(viewMenu, @"150%", @"", static_cast<int>(UiScaleMenuAction::Set150));
+        NSMenuItem* i200 = addItem(viewMenu, @"200%", @"", static_cast<int>(UiScaleMenuAction::Set200));
+        NSMenuItem* i300 = addItem(viewMenu, @"300%", @"", static_cast<int>(UiScaleMenuAction::Set300));
+        NSMenuItem* i400 = addItem(viewMenu, @"400%", @"", static_cast<int>(UiScaleMenuAction::Set400));
         [viewMenu addItem:[NSMenuItem separatorItem]];
         addItem(viewMenu, @"Zoom In", @"=", static_cast<int>(UiScaleMenuAction::ZoomIn));
         addItem(viewMenu, @"Zoom Out", @"-", static_cast<int>(UiScaleMenuAction::ZoomOut));
         addItem(viewMenu, @"Reset Zoom", @"0", static_cast<int>(UiScaleMenuAction::Reset));
 
         g100Items.push_back(i100);
-        g125Items.push_back(i125);
-        g150Items.push_back(i150);
+        g200Items.push_back(i200);
+        g300Items.push_back(i300);
+        g400Items.push_back(i400);
         return viewMenu;
     }
 }
@@ -126,8 +129,9 @@ void InstallUiScaleMenu(uint32_t scaleEventType) {
 void SetUiScaleMenuChecked(int currentPercent) {
     @autoreleasepool {
         for (NSMenuItem* item : g100Items) item.state = currentPercent == 100 ? NSControlStateValueOn : NSControlStateValueOff;
-        for (NSMenuItem* item : g125Items) item.state = currentPercent == 125 ? NSControlStateValueOn : NSControlStateValueOff;
-        for (NSMenuItem* item : g150Items) item.state = currentPercent == 150 ? NSControlStateValueOn : NSControlStateValueOff;
+        for (NSMenuItem* item : g200Items) item.state = currentPercent == 200 ? NSControlStateValueOn : NSControlStateValueOff;
+        for (NSMenuItem* item : g300Items) item.state = currentPercent == 300 ? NSControlStateValueOn : NSControlStateValueOff;
+        for (NSMenuItem* item : g400Items) item.state = currentPercent == 400 ? NSControlStateValueOn : NSControlStateValueOff;
     }
 }
 
