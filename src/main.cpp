@@ -3675,6 +3675,24 @@ int main(int argc, char** argv) {
         aboutDrawnOnce = false;
     };
 
+    // Confirmed via a real window/mouse-event trace on the user's real
+    // machine: the first click right after restoring Main from the
+    // taskbar/Alt-Tab arrives as a bare SDL_MOUSEBUTTONUP with no
+    // preceding SDL_MOUSEBUTTONDOWN at all - the window manager's own
+    // click-to-focus handling consumes that first press to raise/focus
+    // the window, but still lets its release through to the client. Every
+    // button/toggle/slider in this app fires on DOWN, not UP, so that
+    // orphaned release did nothing at all: the "need to click twice"
+    // symptom. sawMouseDownForCurrentPress tracks whether the DOWN half
+    // of the current press was actually delivered to us; when the UP
+    // handler below sees it wasn't, it replays the release as a
+    // synthetic DOWN+UP pair (queued in pendingSynthesizedEvents, drained
+    // by the real event loop) so the exact same hit-testing that a normal
+    // click goes through still runs, instead of the click being silently
+    // dropped.
+    bool sawMouseDownForCurrentPress = false;
+    std::vector<SDL_Event> pendingSynthesizedEvents;
+
     // Shared by the real interactive loop below AND the --sim-click-*
     // debug hooks (see the dump-frame branch just below) - so a synthetic
     // event exercises the exact same SDL coordinate math and hit-testing a
@@ -3870,6 +3888,17 @@ int main(int argc, char** argv) {
                 if (ev.window.event == SDL_WINDOWEVENT_MINIMIZED) {
                     *triggered->minimized = true;
                     lastCascadeMinimizeMs = SDL_GetTicks();
+                    // The minimize button's own click leaves this true
+                    // forever otherwise: clicking Minimize is itself a
+                    // MOUSEBUTTONDOWN that sets it, but the window
+                    // disappears before that same press's MOUSEBUTTONUP
+                    // ever arrives, so it never gets reset back to false
+                    // down in the MOUSEBUTTONUP handler - which then
+                    // makes the *next* click's real orphaned-UP (the
+                    // taskbar-restore one this bookkeeping exists for)
+                    // look like it already had a matching DOWN, skipping
+                    // the synthetic replay it actually needs.
+                    sawMouseDownForCurrentPress = false;
                     // Secondary windows are cascade-hidden (SDL_HideWindow),
                     // not minimized (SDL_MinimizeWindow) - see the restore
                     // branch below for why: two live traces on this
@@ -3944,6 +3973,7 @@ int main(int argc, char** argv) {
 #endif
 
         if (ev.type == SDL_MOUSEBUTTONDOWN && ev.button.button == SDL_BUTTON_LEFT) {
+            sawMouseDownForCurrentPress = true;
             // Raises all three windows together, clicked one on top. Without
             // this, clicking Main doesn't reliably bring EQ/Playlist forward
             // with it - only whichever window macOS happened to have
@@ -4166,15 +4196,28 @@ int main(int argc, char** argv) {
                 }
             }
         } else if (ev.type == SDL_MOUSEBUTTONUP && ev.button.button == SDL_BUTTON_LEFT) {
-            pressedButton = -1;
-            pressedUtility = -1;
-            plPressedButton = -1;
-            eqPressedSlider = -1;
-            eqPressedPreset = -1;
-            volDragging = false;
-            seekDragging = false;
-            plScrollDragging = false;
-            mainDrag.active = plDrag.active = eqDrag.active = infoDrag.active = aboutDrag.active = false;
+            if (!sawMouseDownForCurrentPress) {
+                // See pendingSynthesizedEvents' declaration above: this
+                // release has no matching press we ever saw, so replay it
+                // as a synthetic DOWN+UP pair instead of just resetting
+                // state below - that would silently drop the click
+                // entirely, since every action here fires on DOWN.
+                SDL_Event synthDown = ev;
+                synthDown.type = SDL_MOUSEBUTTONDOWN;
+                pendingSynthesizedEvents.push_back(synthDown);
+                pendingSynthesizedEvents.push_back(ev);
+            } else {
+                pressedButton = -1;
+                pressedUtility = -1;
+                plPressedButton = -1;
+                eqPressedSlider = -1;
+                eqPressedPreset = -1;
+                volDragging = false;
+                seekDragging = false;
+                plScrollDragging = false;
+                mainDrag.active = plDrag.active = eqDrag.active = infoDrag.active = aboutDrag.active = false;
+            }
+            sawMouseDownForCurrentPress = false;
         } else if (ev.type == SDL_MOUSEMOTION) {
             // Dragging itself is driven per-frame below, not from here - a
             // fast drag can outrun the window entirely (cursor ends up over
@@ -4444,7 +4487,18 @@ int main(int argc, char** argv) {
         const Uint32 frameStart = SDL_GetTicks();
 
         SDL_Event ev;
-        while (SDL_PollEvent(&ev)) processEvent(ev);
+        while (SDL_PollEvent(&ev)) {
+            processEvent(ev);
+            // See pendingSynthesizedEvents' declaration near processEvent's
+            // definition: drained here rather than via a recursive
+            // processEvent call from within itself (an auto-deduced
+            // self-referencing lambda doesn't work in C++).
+            while (!pendingSynthesizedEvents.empty()) {
+                SDL_Event synth = pendingSynthesizedEvents.front();
+                pendingSynthesizedEvents.erase(pendingSynthesizedEvents.begin());
+                processEvent(synth);
+            }
+        }
 
 #ifdef __APPLE__
         // SDL's Cocoa backend pumps only the specific event mask it asks
