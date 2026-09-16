@@ -31,8 +31,8 @@
 #include "app/main_menu.h"
 #include "app/media_remote.h"
 #include "app/menu_bar_icon.h"
-#include "app/playback_mode.h"
 #endif
+#include "app/playback_mode.h"
 #include "app/playlist.h"
 #include "app/session.h"
 #include "app/version.h"
