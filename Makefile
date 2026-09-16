@@ -235,7 +235,7 @@ endif
 
 test: $(BUILD)/fft_smoke_test $(BUILD)/font_render_test $(BUILD)/decoder_test $(BUILD)/engine_smoke_test $(BUILD)/eq_test $(BUILD)/window_snap_test $(BUILD)/file_dialog_test $(BUILD)/session_test $(BUILD)/stereo_widen_test $(BUILD)/tags_test $(BUILD)/level_meter_test $(BUILD)/playlist_test $(BUILD)/saturation_test $(BUILD)/compressor_test $(BUILD)/chorus_test $(BUILD)/reverb_test
 	./$(BUILD)/fft_smoke_test
-	./$(BUILD)/font_render_test "../xmplayer/Source/Img_new/DISPLAY.bmp" $(BUILD)/font_render.raw
+	./$(BUILD)/font_render_test "assets/skin/display_font.bmp" $(BUILD)/font_render.raw
 	./$(BUILD)/decoder_test
 	./$(BUILD)/engine_smoke_test tests/fixtures/tone.mp3
 	./$(BUILD)/eq_test
