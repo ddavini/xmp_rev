@@ -61,6 +61,25 @@ SDL_Texture* UploadTexture(SDL_Renderer* renderer, const gfx::Image& img) {
     return tex;
 }
 
+#ifndef __APPLE__
+// Builds an SDL_Surface for SDL_SetWindowIcon from a loaded gfx::Image,
+// treating pure black as transparent - matches BitmapFont::BlitCell's
+// existing color-key convention (see gfx/bitmap_font.cpp), reused here
+// since app_icon.bmp was itself flattened onto black when generated from
+// the macOS .icns (LoadBMP has no real alpha-channel support - see its
+// own comments - so a color key is how this app already does "transparent
+// background" everywhere else). Aliases img's pixel buffer directly (no
+// copy), so img must outlive this surface; SDL_SetWindowIcon itself
+// copies the pixels internally, so both can be freed right after calling
+// it for every window.
+SDL_Surface* BuildIconSurface(const gfx::Image& img) {
+    SDL_Surface* surf = SDL_CreateRGBSurfaceWithFormatFrom(
+        const_cast<uint8_t*>(img.rgba.data()), img.width, img.height, 32, img.width * 4, SDL_PIXELFORMAT_RGBA32);
+    if (surf) SDL_SetColorKey(surf, SDL_TRUE, SDL_MapRGBA(surf->format, 0, 0, 0, 255));
+    return surf;
+}
+#endif
+
 // SDL_WINDOW_ALLOW_HIGHDPI windows report their *size* in points (what we
 // pass to SDL_CreateWindow, and what mouse-event coordinates use), but the
 // renderer's actual backing store on a Retina display is bigger (2x, on
@@ -733,6 +752,31 @@ int main(int argc, char** argv) {
     }
     ApplyHiDpiRenderScale(aboutRenderer, app::layout::kAboutWindowW, app::layout::kAboutWindowH);
     SDL_HideWindow(aboutWindow);
+
+#ifndef __APPLE__
+    // macOS gets a correct icon for free from the .app bundle's
+    // AppIcon.icns (see the `app` Makefile target) - no SDL call needed,
+    // and none of the windows below have ever needed one there. Linux has
+    // no equivalent, so every window fell back to the window manager's
+    // generic default. app_icon.bmp is generated (not hand-drawn) from
+    // that same AppIcon.icns, so the taskbar/alt-tab icon matches across
+    // platforms. All five windows get their own taskbar entry (confirmed
+    // while fixing minimize/restore above), so all five need it set, not
+    // just Main.
+    try {
+        const gfx::Image iconImg = gfx::LoadBMP(assetDir + "/../icon/app_icon.bmp");
+        if (SDL_Surface* iconSurf = BuildIconSurface(iconImg)) {
+            for (SDL_Window* w : {window, eqWindow, plWindow, infoWindow, aboutWindow}) {
+                SDL_SetWindowIcon(w, iconSurf);
+            }
+            SDL_FreeSurface(iconSurf);
+        }
+    } catch (const std::exception&) {
+        // Not fatal - e.g. a packaged/tarball layout that doesn't ship
+        // assets/icon alongside assets/skin yet. Worst case, the window
+        // manager's generic default icon, same as before this change.
+    }
+#endif
 
     // Tracks "does the user *want* this window shown" independent of SDL's
     // own SDL_WINDOW_HIDDEN flag - which turns out to also read true for a
