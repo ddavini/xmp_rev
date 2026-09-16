@@ -480,19 +480,32 @@ void InstallDesktopIntegration(const std::string& assetDir) {
         const char* home = std::getenv("HOME");
         if (!home || !*home) return;
         const std::filesystem::path appsDir = std::filesystem::path(home) / ".local/share/applications";
-        std::filesystem::create_directories(appsDir);
+        const std::filesystem::path desktopFile = appsDir / "xmad.desktop";
 
-        std::ofstream f(appsDir / "xmad.desktop", std::ios::trunc);
+        const std::string content =
+            "[Desktop Entry]\n"
+            "Type=Application\n"
+            "Name=X.MaD Player Revival\n"
+            "Comment=Winamp-style music player\n"
+            "Exec=\"" + exePath + "\" \"" + absAssetDir.string() + "\"\n"
+            "Icon=" + iconPng.string() + "\n"
+            "Terminal=false\n"
+            "Categories=AudioVideo;Audio;Player;\n"
+            "StartupWMClass=xmad\n";
+
+        // Rewritten (and update-desktop-database re-run) unconditionally
+        // on every launch, even when content is unchanged from last time:
+        // tried skipping both when nothing had changed as a way to cut the
+        // Dash/Alt-Tab icon's few-seconds-to-appear delay, but that made
+        // GNOME Shell not pick up the icon at all on a repeat launch - the
+        // update-desktop-database call (or the file-write's inotify event)
+        // is apparently what prompts Shell to (re-)associate the new
+        // window with this app each time, not just once at install. Slower
+        // than it could be, but confirmed working.
+        std::filesystem::create_directories(appsDir);
+        std::ofstream f(desktopFile, std::ios::trunc);
         if (!f) return;
-        f << "[Desktop Entry]\n"
-             "Type=Application\n"
-             "Name=X.MaD Player Revival\n"
-             "Comment=Winamp-style music player\n"
-             "Exec=\"" << exePath << "\" \"" << absAssetDir.string() << "\"\n"
-             "Icon=" << iconPng.string() << "\n"
-             "Terminal=false\n"
-             "Categories=AudioVideo;Audio;Player;\n"
-             "StartupWMClass=xmad\n";
+        f << content;
         f.close();
 
         // Best-effort: some desktop environments need this to notice a new
