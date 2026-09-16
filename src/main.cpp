@@ -558,6 +558,24 @@ int main(int argc, char** argv) {
     // This hint makes the very first, focus-granting click count too.
     SDL_SetHint(SDL_HINT_MOUSE_FOCUS_CLICKTHROUGH, "1");
 
+#ifndef __APPLE__
+    // Sets the Wayland app_id / X11 WM_CLASS (no #define constant for
+    // these particular hint names ships in this SDL2 version's own
+    // headers, but the strings themselves are recognized by the library -
+    // confirmed via `strings` on libSDL2.so) to "xmad", matching
+    // StartupWMClass in assets/icon/xmad.desktop.in (installed by `make
+    // run`/`make install-desktop` - see the Makefile). Without this, the
+    // window manager has no reliable way to associate a running window
+    // with that .desktop entry - and therefore no taskbar/Alt-Tab icon -
+    // since Wayland's core protocol has no API for a client to set its
+    // own icon at runtime the way X11's _NET_WM_ICON does; SDL_SetWindowIcon
+    // below is a silent no-op under native Wayland for exactly that reason
+    // (kept anyway since it *does* work when this same binary happens to
+    // run under X11/XWayland instead).
+    SDL_SetHint("SDL_VIDEO_WAYLAND_WMCLASS", "xmad");
+    SDL_SetHint("SDL_VIDEO_X11_WMCLASS", "xmad");
+#endif
+
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) != 0) {
         std::cerr << "SDL_Init failed: " << SDL_GetError() << "\n";
         return 1;
