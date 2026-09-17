@@ -1,2 +1,10 @@
 - Look into porting to iOS for Carplay integration
 - ID3 tag editing (reading title already works, editing does not)
+- CPU: add a Main-window dirty-check (like PL/EQ/Info already have) so it
+  skips redraw+present when fully idle, instead of always drawing at the
+  frame-cap rate. Higher-risk-than-reward: Main is by far the most stateful
+  window (spectrum bar decay/peak physics, VU meters, drag state, several
+  popups), so a snapshot key is more likely to miss an input and leave
+  something stale on screen than it was for PL/EQ/Info - and since switching
+  to GPU-accelerated rendering already cut Main's per-frame cost a lot, the
+  remaining payoff is smaller than it would have been before. Not urgent.
