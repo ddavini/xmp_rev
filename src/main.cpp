@@ -300,6 +300,27 @@ void DrawFadeColumn(SDL_Renderer* r, int x, int y, int w, int h, float fillPx) {
     }
 }
 
+// Log-scale bin grouping (bar i covers bins [edges[i], edges[i+1])) -
+// standard spectrum-analyzer bucketing: fine resolution at the low end,
+// coarse at the high end, without needing to know the actual sample
+// rate (this groups by bin index, not Hz). Shared by the in-window
+// analyzer (numBars=kNumBars) and the tray-icon visualizer
+// (numBars=kTrayBarCount).
+std::vector<int> ComputeBarBinEdges(int fftBins, int numBars) {
+    std::vector<int> edges(static_cast<size_t>(numBars) + 1);
+    for (int i = 0; i <= numBars; ++i) {
+        const double t = static_cast<double>(i) / numBars;
+        int edge = static_cast<int>(std::lround(std::pow(static_cast<double>(fftBins), t)));
+        edges[static_cast<size_t>(i)] = std::clamp(edge, 1, fftBins - 1);
+    }
+    for (int i = 1; i <= numBars; ++i) {
+        if (edges[static_cast<size_t>(i)] <= edges[static_cast<size_t>(i - 1)]) {
+            edges[static_cast<size_t>(i)] = edges[static_cast<size_t>(i - 1)] + 1;
+        }
+    }
+    return edges;
+}
+
 // Matches xmp.frm's CommandImg_MouseDown Select Case (Index 0-5) exactly:
 // Back/Next are playlist navigation (MoveInMp3), Eject opens a file dialog
 // (OpenMp3dlg) - neither playlist nor file dialog exist yet, so those three
@@ -1330,24 +1351,22 @@ int main(int argc, char** argv) {
     constexpr float kFadeFillDecayPx = 1.4f;
     constexpr float kFadeTrailDecayPx = 0.2f;
 
-    // Log-scale bin grouping (bar i covers bins [edges[i], edges[i+1])) -
-    // standard spectrum-analyzer bucketing: fine resolution at the low end,
-    // coarse at the high end, without needing to know the actual sample
-    // rate (this groups by bin index, not Hz).
-    std::array<int, kNumBars + 1> barBinEdges{};
-    {
-        constexpr int kFftBins = kFftPoints / 2;
-        for (int i = 0; i <= kNumBars; ++i) {
-            const double t = static_cast<double>(i) / kNumBars;
-            int edge = static_cast<int>(std::lround(std::pow(static_cast<double>(kFftBins), t)));
-            barBinEdges[static_cast<size_t>(i)] = std::clamp(edge, 1, kFftBins - 1);
-        }
-        for (int i = 1; i <= kNumBars; ++i) {
-            if (barBinEdges[static_cast<size_t>(i)] <= barBinEdges[static_cast<size_t>(i - 1)]) {
-                barBinEdges[static_cast<size_t>(i)] = barBinEdges[static_cast<size_t>(i - 1)] + 1;
-            }
-        }
-    }
+    const std::vector<int> barBinEdges = ComputeBarBinEdges(kFftPoints / 2, kNumBars);
+
+#ifdef __APPLE__
+    // Tray-icon visualizer state. A separate SpectrumAnalyzer instance
+    // (not reusing spectrumAnalyzer) keeps the tray tick fully decoupled
+    // from the in-window analyzer's per-bar decay/peak/fade state
+    // (barHeightPx/peakHeightPx/fadeFillPx/fadeTrailPx), which is sized/
+    // tuned for kNumBars at the analyzer box's width - meaningless for
+    // an 8-bar ~14px status-item icon.
+    constexpr int kTrayBarCount = 8;
+    constexpr int kTrayWaveSamples = 20;
+    const std::vector<int> trayBarBinEdges = ComputeBarBinEdges(kFftPoints / 2, kTrayBarCount);
+    dsp::SpectrumAnalyzer traySpectrumAnalyzer(kFftPoints, dsp::Window::Hanning);
+    int trayTickCounter = 0;
+    bool trayWasAnimating = false;
+#endif
 
     // Transport row hit-test table, in the same left-to-right order they're
     // drawn (Back, Play, Stop, Next, Pause, Eject - the runtime-reflowed
@@ -1404,6 +1423,9 @@ int main(int argc, char** argv) {
     enum class VisMode { PeakFalls, NoPeakFalls, PeakNoFalls, FadeFft, Oscilloscope, StereoOscilloscope };
     VisMode visMode = resumeSession ? static_cast<VisMode>(std::clamp(sessionSettings.specMode, 0, 5))
                                      : VisMode::PeakFalls;
+    auto isOscilloscopeMode = [](VisMode m) {
+        return m == VisMode::Oscilloscope || m == VisMode::StereoOscilloscope;
+    };
 
     // TODO: "visualizations missing from the original". The real xmp.frm
     // shares ONE box (the analyzer's) between three completely separate
@@ -4566,6 +4588,55 @@ int main(int argc, char** argv) {
             drawFrame();
             SDL_RenderPresent(renderer);
         }
+#ifdef __APPLE__
+        else if (appHiddenToTray) {
+            // 60fps loop / 4 ~= 15fps pushed into Cocoa - plenty smooth
+            // for an ~8-bar/20-sample status-item icon, without hammering
+            // AppKit every frame while minimized.
+            constexpr int kTrayTickDivisor = 4;
+            if (++trayTickCounter >= kTrayTickDivisor) {
+                trayTickCounter = 0;
+                std::vector<float> snap;
+                int snapChannels = 0;
+                const bool haveSnap = engine.channels() != 0 && engine.state() == audio::PlayState::Playing &&
+                                      engine.GetVisSnapshot(snap, snapChannels) && snapChannels > 0 &&
+                                      static_cast<int>(snap.size()) >= kFftPoints * snapChannels;
+                if (haveSnap && visPanel == VisPanel::Analyzer) {
+                    if (isOscilloscopeMode(visMode)) {
+                        std::vector<float> trayLevels(kTrayWaveSamples);
+                        for (int i = 0; i < kTrayWaveSamples; ++i) {
+                            const int idx = i * kFftPoints / kTrayWaveSamples;
+                            float s = 0.0f;
+                            for (int c = 0; c < snapChannels; ++c) s += snap[static_cast<size_t>(idx) * snapChannels + c];
+                            trayLevels[static_cast<size_t>(i)] = std::clamp(s / snapChannels, -1.0f, 1.0f);
+                        }
+                        app::UpdateMenuBarVisualizer(trayLevels.data(), kTrayWaveSamples, true);
+                    } else {
+                        for (int i = 0; i < kFftPoints; ++i) {
+                            float s = 0.0f;
+                            for (int c = 0; c < snapChannels; ++c) s += snap[static_cast<size_t>(i) * snapChannels + c];
+                            traySpectrumAnalyzer.Feed(i, s / snapChannels);
+                        }
+                        std::vector<int> spec(kFftPoints / 2);
+                        traySpectrumAnalyzer.Transform(spec.data());
+                        std::vector<float> trayLevels(kTrayBarCount);
+                        for (int bar = 0; bar < kTrayBarCount; ++bar) {
+                            int peakDb = -180;
+                            for (int bin = trayBarBinEdges[static_cast<size_t>(bar)];
+                                 bin < trayBarBinEdges[static_cast<size_t>(bar + 1)]; ++bin)
+                                peakDb = std::max(peakDb, spec[static_cast<size_t>(bin)]);
+                            trayLevels[static_cast<size_t>(bar)] = std::clamp((peakDb + 60.0f) / 60.0f, 0.0f, 1.0f);
+                        }
+                        app::UpdateMenuBarVisualizer(trayLevels.data(), kTrayBarCount, false);
+                    }
+                    trayWasAnimating = true;
+                } else if (trayWasAnimating) {
+                    app::ClearMenuBarVisualizer();
+                    trayWasAnimating = false;
+                }
+            }
+        }
+#endif
         if (plUserVisible && !plMinimized) {
             PlaylistFrameKey plKey{playlist.Generation(), playlist.currentIndex(), plSelected,
                                     plScrollOffset,        plPressedButton,        engine.sampleRate(),

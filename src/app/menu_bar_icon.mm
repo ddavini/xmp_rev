@@ -4,6 +4,9 @@
 #import <Cocoa/Cocoa.h>
 #include <SDL2/SDL.h>
 
+#include <algorithm>
+#include <vector>
+
 // Kept private to this translation unit - menu_bar_icon.h stays
 // Objective-C-free so it's safe for main.cpp (plain C++) to include.
 @interface XmadMenuBarTarget : NSObject
@@ -52,6 +55,8 @@
 namespace {
 NSStatusItem* gStatusItem = nil;
 XmadMenuBarTarget* gTarget = nil;
+NSImage* gStaticIcon = nil;
+bool gShowingVisualizer = false;
 } // namespace
 
 namespace xmad::app {
@@ -98,6 +103,7 @@ void ShowMenuBarIcon(uint32_t restoreEventType, uint32_t scaleEventType, uint32_
             // does not compile under Objective-C++.
             [icon setTemplate:NO];
             gStatusItem.button.image = icon;
+            gStaticIcon = icon;
         }
         gStatusItem.button.target = gTarget;
         gStatusItem.button.action = @selector(onClick:);
@@ -114,6 +120,8 @@ void HideMenuBarIcon() {
         [[NSStatusBar systemStatusBar] removeStatusItem:gStatusItem];
         gStatusItem = nil;
         gTarget = nil;
+        gStaticIcon = nil;
+        gShowingVisualizer = false;
     }
 }
 
@@ -141,6 +149,70 @@ void SetDockIconVisible(bool visible) {
             // away). Must happen before the caller shows/raises windows.
             [NSApp activateIgnoringOtherApps:YES];
         }
+    }
+}
+
+void UpdateMenuBarVisualizer(const float* levels, int count, bool oscilloscope) {
+    @autoreleasepool {
+        if (!gStatusItem || !levels || count <= 0) return;
+
+        // imageWithSize:flipped:drawingHandler: invokes the block lazily
+        // (and potentially more than once - e.g. separately for 1x/2x
+        // backing scales, or on a later redraw) rather than rendering
+        // eagerly here. The block must own its data rather than pointing
+        // at the caller's stack buffer (main.cpp's per-tick std::vector),
+        // which is long gone by the time a deferred/repeat invocation
+        // runs - capturing `levels` by pointer here previously caused
+        // exactly that: a dangling read that showed stale/garbage bars
+        // and, in oscilloscope mode, occasionally fed NaN/huge
+        // coordinates into NSBezierPath and crashed. `count` is captured
+        // by value (trivial int), so the copy's size always matches.
+        std::vector<float> levelsCopy(levels, levels + count);
+
+        const NSSize kIconSize = NSMakeSize(20, 14);
+        NSImage* img = [NSImage imageWithSize:kIconSize
+                                       flipped:NO
+                                drawingHandler:^BOOL(NSRect dstRect) {
+            // Same green used for the in-window analyzer/oscilloscope
+            // (0x3dff74) - keeps the tray visualizer visually consistent
+            // with the main window's.
+            [[NSColor colorWithCalibratedRed:0x3d / 255.0 green:0xff / 255.0 blue:0x74 / 255.0 alpha:1.0] set];
+            if (oscilloscope) {
+                NSBezierPath* path = [NSBezierPath bezierPath];
+                path.lineWidth = 1.0;
+                for (int i = 0; i < count; ++i) {
+                    const CGFloat x = dstRect.origin.x + dstRect.size.width * i / (count - 1 > 0 ? count - 1 : 1);
+                    const CGFloat y = dstRect.origin.y + dstRect.size.height * (0.5 + 0.5 * levelsCopy[static_cast<size_t>(i)]);
+                    if (i == 0) {
+                        [path moveToPoint:NSMakePoint(x, y)];
+                    } else {
+                        [path lineToPoint:NSMakePoint(x, y)];
+                    }
+                }
+                [path stroke];
+            } else {
+                const CGFloat barW = dstRect.size.width / count;
+                for (int i = 0; i < count; ++i) {
+                    const CGFloat h = dstRect.size.height * std::clamp(levelsCopy[static_cast<size_t>(i)], 0.0f, 1.0f);
+                    NSRect bar = NSMakeRect(dstRect.origin.x + i * barW, dstRect.origin.y, barW * 0.7, h);
+                    NSRectFill(bar);
+                }
+            }
+            return YES;
+        }];
+        // Essential: a template image gets monochrome-tinted by the
+        // system (menu-bar light/dark mode), which would lose the green.
+        [img setTemplate:NO];
+        gStatusItem.button.image = img;
+        gShowingVisualizer = true;
+    }
+}
+
+void ClearMenuBarVisualizer() {
+    @autoreleasepool {
+        if (!gStatusItem || !gShowingVisualizer) return;
+        gStatusItem.button.image = gStaticIcon;
+        gShowingVisualizer = false;
     }
 }
 

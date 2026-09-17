@@ -65,4 +65,14 @@ void ActivateApp();
 // which always add the new access point before removing the old one.
 void SetDockIconVisible(bool visible);
 
+// levels: `count` values. Bar mode (oscilloscope=false): each in [0,1],
+// bar height. Oscilloscope mode (oscilloscope=true): each in [-1,1],
+// waveform samples left-to-right in time. Called from main.cpp's tray
+// tick while appHiddenToTray is true and playback is active.
+void UpdateMenuBarVisualizer(const float* levels, int count, bool oscilloscope);
+
+// Reverts the status item's icon back to the cached static app icon.
+// No-op if not currently showing the visualizer.
+void ClearMenuBarVisualizer();
+
 } // namespace xmad::app
