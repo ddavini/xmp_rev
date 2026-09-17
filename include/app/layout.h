@@ -109,7 +109,7 @@ constexpr int kEffectsMenuY = kEffectsToggleY - kEffectsMenuH;
 // new 2-row Playback list. kEffectsToggleX/Y/W/H stays the on-screen
 // button's rect (just relabeled "FX"->"OP" at its drawToggle call site).
 constexpr int kOptionsMenuItemH = 12;
-constexpr int kOptionsMenuTopItems = 2; // Effects, Playback
+constexpr int kOptionsMenuTopItems = 3; // Effects, Playback, Potato
 constexpr int kOptionsMenuTopW = 64;
 constexpr int kOptionsMenuTopH = kOptionsMenuItemH * kOptionsMenuTopItems;
 constexpr int kOptionsMenuTopX = kEffectsToggleX;
@@ -120,6 +120,15 @@ constexpr int kPlaybackMenuW = kEffectsMenuW;
 constexpr int kPlaybackMenuH = kOptionsMenuItemH * kPlaybackMenuItems;
 constexpr int kPlaybackMenuX = kEffectsToggleX;
 constexpr int kPlaybackMenuY = kEffectsToggleY - kPlaybackMenuH;
+
+// New (not in the original): low-resource toggles for underpowered/older
+// machines - see main.cpp's kFrameBudgetMs and drawFrame's visPanel
+// dispatch. Same leaf-menu geometry convention as kPlaybackMenu* above.
+constexpr int kPotatoMenuItems = 2; // 30 FPS, Cheap Visualizer
+constexpr int kPotatoMenuW = kEffectsMenuW;
+constexpr int kPotatoMenuH = kOptionsMenuItemH * kPotatoMenuItems;
+constexpr int kPotatoMenuX = kEffectsToggleX;
+constexpr int kPotatoMenuY = kEffectsToggleY - kPotatoMenuH;
 
 // xmDisplay(0)/(1): title marquee and status line.
 constexpr int kMarqueeX = 16, kMarqueeY = 26, kDisplayFieldW = 278;

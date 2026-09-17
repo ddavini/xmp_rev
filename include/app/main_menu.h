@@ -30,6 +30,10 @@
 //   submenu there - grouping them under "Playback" here is this port's
 //   own organizational choice, not a literal port of the original's flat
 //   menu layout).
+//
+//   Potato: "30 FPS" and "Cheap Visualizer" - new, not in the original.
+//   Low-resource toggles (see main.cpp's kFrameBudgetMs and drawFrame's
+//   visPanel dispatch) for underpowered/older Macs.
 
 namespace xmad::app {
 
@@ -65,13 +69,13 @@ enum class EffectsMenuAction : int32_t {
     ToggleChorus = 4,
 };
 
-// Installs the top-level "Options" menu (Effects + Playback submenus) in
-// one call - replaces the old InstallEffectsMenu, which added "Effects"
-// directly to the menu bar; effectsEventType/playbackEventType are each
-// an SDL_RegisterEvents-allocated code, same bridging pattern as
-// scaleEventType above, one per submenu since they dispatch different
-// action enums.
-void InstallOptionsMenu(uint32_t effectsEventType, uint32_t playbackEventType);
+// Installs the top-level "Options" menu (Effects + Playback + Potato
+// submenus) in one call - replaces the old InstallEffectsMenu, which added
+// "Effects" directly to the menu bar; effectsEventType/playbackEventType/
+// potatoEventType are each an SDL_RegisterEvents-allocated code, same
+// bridging pattern as scaleEventType above, one per submenu since they
+// dispatch different action enums.
+void InstallOptionsMenu(uint32_t effectsEventType, uint32_t playbackEventType, uint32_t potatoEventType);
 
 // Bundles all 5 toggle states in one call - avoids an error-prone
 // 5-bool-parameter-order call site now that there's more than just xSound.
@@ -106,5 +110,23 @@ struct PlaybackMenuState {
 // InstallOptionsMenu with the resumed/initial state, and again every time
 // either is toggled (from a menu or a resumed session).
 void SetPlaybackMenuChecked(const PlaybackMenuState& state);
+
+// potatoEventType: same bridging pattern as effectsEventType above.
+enum class PotatoMenuAction : int32_t {
+    ToggleLowFps = 0,
+    ToggleCheapVisualizer = 1,
+};
+
+// Bundles both Potato toggle states in one call, same reasoning as
+// PlaybackMenuState above.
+struct PotatoMenuState {
+    bool lowFps = false;
+    bool cheapVisualizer = false;
+};
+
+// Updates the "30 FPS"/"Cheap Visualizer" items' checkmarks - call once
+// after InstallOptionsMenu with the resumed/initial state, and again every
+// time either is toggled (from a menu or a resumed session).
+void SetPotatoMenuChecked(const PotatoMenuState& state);
 
 } // namespace xmad::app

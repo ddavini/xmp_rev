@@ -31,22 +31,22 @@ namespace xmad::app {
 // that same shape for Main a moment later, which was indistinguishable
 // from a real click and caused the app to immediately un-hide itself.
 // Right-clicking it instead pops up a context menu with "View",
-// "Effects" and "Playback" submenus - the same controls as the real menu
-// bar (see main_menu.h) - built from scaleEventType/effectsEventType/
-// playbackEventType, the same event types the caller already passed to
-// InstallUiScaleMenu/InstallOptionsMenu, so picking an item there routes
-// through the exact same processEvent handling either menu would. Kept
-// as three flat sibling items here rather than nesting Effects/Playback
-// under an "Options" item the way the real menu bar does - a right-click
-// tray popup is conventionally flatter than a menu bar. Below those, a
-// "Quit" item pushes a real SDL_QUIT (same effect as Cmd+Q/the real
-// Quit menu item - no dedicated event type needed), then a separator
-// and an "About" item push aboutEventType (an SDL_RegisterEvents-
-// allocated code owned by the caller, same pattern as the other event
-// types here) when clicked. Idempotent: a second call while already
-// showing is a no-op.
+// "Effects", "Playback" and "Potato" submenus - the same controls as the
+// real menu bar (see main_menu.h) - built from scaleEventType/
+// effectsEventType/playbackEventType/potatoEventType, the same event types
+// the caller already passed to InstallUiScaleMenu/InstallOptionsMenu, so
+// picking an item there routes through the exact same processEvent
+// handling either menu would. Kept as flat sibling items here rather than
+// nesting Effects/Playback/Potato under an "Options" item the way the real
+// menu bar does - a right-click tray popup is conventionally flatter than
+// a menu bar. Below those, a "Quit" item pushes a real SDL_QUIT (same
+// effect as Cmd+Q/the real Quit menu item - no dedicated event type
+// needed), then a separator and an "About" item push aboutEventType (an
+// SDL_RegisterEvents-allocated code owned by the caller, same pattern as
+// the other event types here) when clicked. Idempotent: a second call
+// while already showing is a no-op.
 void ShowMenuBarIcon(uint32_t restoreEventType, uint32_t scaleEventType, uint32_t effectsEventType,
-                      uint32_t playbackEventType, uint32_t aboutEventType);
+                      uint32_t playbackEventType, uint32_t potatoEventType, uint32_t aboutEventType);
 
 // Removes the status item, if present. Idempotent/safe when none exists.
 void HideMenuBarIcon();

@@ -74,6 +74,13 @@ struct Settings {
     // every window's size/position and the mouse-hit-test coordinate
     // conversion, not just drawing - see main.cpp's `scale`.
     int uiScalePercent = 100;
+    // TODO: "low resource mode, 30FPS ... Activation in a new menu of
+    // Options called Potato" - two independent flags, loaded unconditionally
+    // at startup (see main.cpp's uiScalePercent early-load block) rather
+    // than gated on resumeSession like repeat/random: these are performance
+    // prefs, not playback state.
+    bool potatoLowFps = false;          // Potato > "30 FPS": halves the render loop's frame cap
+    bool potatoCheapVisualizer = false; // Potato > "Cheap Visualizer": forces VU/peak-bar-only rendering
 };
 
 // Pure parsing/serialization - no filesystem access, so directly

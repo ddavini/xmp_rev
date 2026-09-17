@@ -47,6 +47,8 @@ int main() {
         s.visPanel = 2;
         s.perSongEq = true;
         s.uiScalePercent = 125;
+        s.potatoLowFps = true;
+        s.potatoCheapVisualizer = true;
         const std::string text = SerializeSettings(s);
 
         Settings parsed;
@@ -70,6 +72,8 @@ int main() {
         Check(parsed.visPanel == 2, "round-trip: visPanel");
         Check(parsed.perSongEq == true, "round-trip: perSongEq");
         Check(parsed.uiScalePercent == 125, "round-trip: uiScalePercent");
+        Check(parsed.potatoLowFps == true, "round-trip: potatoLowFps");
+        Check(parsed.potatoCheapVisualizer == true, "round-trip: potatoCheapVisualizer");
     }
 
     // wasPaused round-trips independently of wasPlaying - the fix for
@@ -137,6 +141,8 @@ int main() {
         Check(parsed.visPanel == 0, "missing key keeps default (visPanel)");
         Check(parsed.perSongEq == false, "missing key keeps default (perSongEq)");
         Check(parsed.uiScalePercent == 100, "missing key keeps default (uiScalePercent)");
+        Check(parsed.potatoLowFps == false, "missing key keeps default (potatoLowFps)");
+        Check(parsed.potatoCheapVisualizer == false, "missing key keeps default (potatoCheapVisualizer)");
     }
 
     // EQBANDS tolerates fewer fields than expected (fills what's present,

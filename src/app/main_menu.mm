@@ -50,6 +50,10 @@ std::unordered_map<int32_t, std::vector<NSMenuItem*>> gEffectsItemsByTag;
 XmadMenuActionTarget* gPlaybackTarget = nil;
 // Same idea as gEffectsItemsByTag, keyed by PlaybackMenuAction tag.
 std::unordered_map<int32_t, std::vector<NSMenuItem*>> gPlaybackItemsByTag;
+
+XmadMenuActionTarget* gPotatoTarget = nil;
+// Same idea as gEffectsItemsByTag, keyed by PotatoMenuAction tag.
+std::unordered_map<int32_t, std::vector<NSMenuItem*>> gPotatoItemsByTag;
 } // namespace
 
 namespace xmad::app {
@@ -137,6 +141,28 @@ NSMenu* BuildPlaybackMenu(uint32_t playbackEventType) {
     }
 }
 
+NSMenu* BuildPotatoMenu(uint32_t potatoEventType) {
+    @autoreleasepool {
+        if (!gPotatoTarget) {
+            gPotatoTarget = [[XmadMenuActionTarget alloc] init];
+            gPotatoTarget.eventType = potatoEventType;
+        }
+
+        NSMenu* potatoMenu = [[NSMenu alloc] initWithTitle:@"Potato"];
+        auto addToggle = [&](NSString* title, PotatoMenuAction action) {
+            NSMenuItem* item = [potatoMenu addItemWithTitle:title
+                                                       action:@selector(onMenuAction:)
+                                                keyEquivalent:@""];
+            item.target = gPotatoTarget;
+            item.tag = static_cast<int>(action);
+            gPotatoItemsByTag[static_cast<int32_t>(action)].push_back(item);
+        };
+        addToggle(@"30 FPS", PotatoMenuAction::ToggleLowFps);
+        addToggle(@"Cheap Visualizer", PotatoMenuAction::ToggleCheapVisualizer);
+        return potatoMenu;
+    }
+}
+
 } // namespace detail
 
 void InstallUiScaleMenu(uint32_t scaleEventType) {
@@ -161,15 +187,15 @@ void SetUiScaleMenuChecked(int currentPercent) {
     }
 }
 
-void InstallOptionsMenu(uint32_t effectsEventType, uint32_t playbackEventType) {
+void InstallOptionsMenu(uint32_t effectsEventType, uint32_t playbackEventType, uint32_t potatoEventType) {
     @autoreleasepool {
         static bool installed = false; // idempotent, same spirit as InstallUiScaleMenu
         if (installed) return;
         installed = true;
 
         // Top-level "Options" menu (matching the original's real "Option"
-        // menu - Source/Menu.frm's mnuXmPButton) holding Effects and
-        // Playback as submenus, rather than adding them directly to the
+        // menu - Source/Menu.frm's mnuXmPButton) holding Effects, Playback
+        // and Potato as submenus, rather than adding them directly to the
         // menu bar the way the old flat InstallEffectsMenu did.
         NSMenu* optionsMenu = [[NSMenu alloc] initWithTitle:@"Options"];
 
@@ -180,6 +206,10 @@ void InstallOptionsMenu(uint32_t effectsEventType, uint32_t playbackEventType) {
         NSMenuItem* playbackItem = [[NSMenuItem alloc] initWithTitle:@"Playback" action:nil keyEquivalent:@""];
         playbackItem.submenu = detail::BuildPlaybackMenu(playbackEventType);
         [optionsMenu addItem:playbackItem];
+
+        NSMenuItem* potatoItem = [[NSMenuItem alloc] initWithTitle:@"Potato" action:nil keyEquivalent:@""];
+        potatoItem.submenu = detail::BuildPotatoMenu(potatoEventType);
+        [optionsMenu addItem:potatoItem];
 
         NSMenuItem* optionsMenuItem = [[NSMenuItem alloc] initWithTitle:@"Options" action:nil keyEquivalent:@""];
         optionsMenuItem.submenu = optionsMenu;
@@ -211,6 +241,18 @@ void SetPlaybackMenuChecked(const PlaybackMenuState& state) {
         };
         apply(PlaybackMenuAction::ToggleRepeat, state.repeat);
         apply(PlaybackMenuAction::ToggleRandom, state.random);
+    }
+}
+
+void SetPotatoMenuChecked(const PotatoMenuState& state) {
+    @autoreleasepool {
+        auto apply = [](PotatoMenuAction action, bool on) {
+            auto it = gPotatoItemsByTag.find(static_cast<int32_t>(action));
+            if (it == gPotatoItemsByTag.end()) return;
+            for (NSMenuItem* item : it->second) item.state = on ? NSControlStateValueOn : NSControlStateValueOff;
+        };
+        apply(PotatoMenuAction::ToggleLowFps, state.lowFps);
+        apply(PotatoMenuAction::ToggleCheapVisualizer, state.cheapVisualizer);
     }
 }
 

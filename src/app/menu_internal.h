@@ -28,4 +28,7 @@ NSMenu* BuildEffectsMenu(uint32_t effectsEventType);
 // Same idea for the "Playback" menu (Repeat, Random).
 NSMenu* BuildPlaybackMenu(uint32_t playbackEventType);
 
+// Same idea for the "Potato" menu (30 FPS, Cheap Visualizer).
+NSMenu* BuildPotatoMenu(uint32_t potatoEventType);
+
 } // namespace xmad::app::detail

@@ -730,13 +730,15 @@ int main(int argc, char** argv) {
     const Uint32 kUiScaleEventType = SDL_RegisterEvents(1);
     app::InstallUiScaleMenu(kUiScaleEventType);
 
-    // Options menu (Effects + Playback submenus) - same bridging pattern
-    // as the View menu above; each submenu gets its own event type since
-    // they dispatch different action enums. Consumed in processEvent
-    // below via toggleXSound/etc. and toggleRepeat/toggleRandom.
+    // Options menu (Effects + Playback + Potato submenus) - same bridging
+    // pattern as the View menu above; each submenu gets its own event type
+    // since they dispatch different action enums. Consumed in processEvent
+    // below via toggleXSound/etc., toggleRepeat/toggleRandom, and
+    // toggleLowFps/toggleCheapVisualizer.
     const Uint32 kEffectsEventType = SDL_RegisterEvents(1);
     const Uint32 kPlaybackEventType = SDL_RegisterEvents(1);
-    app::InstallOptionsMenu(kEffectsEventType, kPlaybackEventType);
+    const Uint32 kPotatoEventType = SDL_RegisterEvents(1);
+    app::InstallOptionsMenu(kEffectsEventType, kPlaybackEventType, kPotatoEventType);
 #endif
 
     // TODO: "Add a setting for UI scale / text+button size" - loaded here,
@@ -748,20 +750,34 @@ int main(int argc, char** argv) {
     // preference. Reads settings.cfg a second time (the resumeSession
     // block re-reads it later for its own fields) - a deliberately cheap,
     // additive trade-off rather than restructuring that block's ordering.
+    // Potato's two flags (see app/session.h) share this same early,
+    // resumeSession-independent load for the same reason: they're
+    // performance prefs, not playback state.
     int uiScalePercent = 100;
+    bool potatoLowFps = false;
+    bool potatoCheapVisualizer = false;
     {
         app::Settings scalePrefs;
         if (app::LoadSettingsFile(app::SettingsFilePath(), scalePrefs)) {
             uiScalePercent = SnapUiScalePercent(scalePrefs.uiScalePercent);
+            potatoLowFps = scalePrefs.potatoLowFps;
+            potatoCheapVisualizer = scalePrefs.potatoCheapVisualizer;
         }
     }
     const bool dumpingAnyFrameEarly = !dumpFramePath.empty() || !dumpPlaylistFramePath.empty() ||
                                        !dumpEqFramePath.empty() || !dumpInfoFramePath.empty() ||
                                        !dumpAboutFramePath.empty();
     if (dumpingAnyFrameEarly) uiScalePercent = 100;
+    // Cheap Visualizer changes what drawFrame() renders (forces VU-bars-
+    // only) - same determinism concern as uiScalePercent above, so it gets
+    // the same treatment. potatoLowFps only affects the main loop's
+    // SDL_Delay cadence; the dump path calls drawFrame() directly and never
+    // enters that loop, so it needs no forcing.
+    if (dumpingAnyFrameEarly) potatoCheapVisualizer = false;
     double scale = uiScalePercent / 100.0;
 #ifdef __APPLE__
     app::SetUiScaleMenuChecked(uiScalePercent); // reflect a resumed non-default scale immediately
+    app::SetPotatoMenuChecked(app::PotatoMenuState{potatoLowFps, potatoCheapVisualizer}); // reflect loaded Potato prefs immediately
 #endif
     // Borderless: matches the original's BorderStyle=0 (fully custom-drawn,
     // no OS title bar/chrome). This means there's no native close button or
@@ -1043,6 +1059,10 @@ int main(int argc, char** argv) {
 #ifdef __APPLE__
     // Same reasoning as effectsMenuState above, for the Playback submenu.
     auto playbackMenuState = [&]() { return app::PlaybackMenuState{repeatEnabled, randomEnabled}; };
+    // Same reasoning again, for the Potato submenu. potatoLowFps/
+    // potatoCheapVisualizer are declared earlier (the uiScalePercent-style
+    // early load block), so they're already in scope here.
+    auto potatoMenuState = [&]() { return app::PotatoMenuState{potatoLowFps, potatoCheapVisualizer}; };
 #endif
 
 #ifdef __APPLE__
@@ -1087,10 +1107,10 @@ int main(int argc, char** argv) {
         // there's never a moment with neither a Dock icon nor a
         // menu-bar icon available to click.
         app::ShowMenuBarIcon(kTrayRestoreEventType, kUiScaleEventType, kEffectsEventType, kPlaybackEventType,
-                             kTrayAboutEventType);
+                             kPotatoEventType, kTrayAboutEventType);
         // ShowMenuBarIcon is idempotent (a no-op past the first call),
         // so it only actually builds the tray popup's own View/Effects/
-        // Playback items the first time the app is ever minimized in this run -
+        // Playback/Potato items the first time the app is ever minimized in this run -
         // freshly built items default to unchecked, so without this
         // they'd stay wrong forever if the scale/xSound state at that
         // moment wasn't the default (e.g. xSound already toggled on
@@ -1099,6 +1119,7 @@ int main(int argc, char** argv) {
         app::SetUiScaleMenuChecked(uiScalePercent);
         app::SetEffectsMenuChecked(effectsMenuState());
         app::SetPlaybackMenuChecked(playbackMenuState());
+        app::SetPotatoMenuChecked(potatoMenuState());
         app::SetDockIconVisible(false);
     };
     auto exitAppTray = [&]() {
@@ -1322,6 +1343,12 @@ int main(int argc, char** argv) {
     cardioSinBuf.height = cardioDesBuf.height = kAnalyzerH;
     cardioSinBuf.rgba.assign(static_cast<size_t>(kCardioTraceW) * kAnalyzerH * 4, 0);
     cardioDesBuf.rgba.assign(static_cast<size_t>(kCardioTraceW) * kAnalyzerH * 4, 0);
+    // Persistent textures, updated in place every frame instead of being
+    // recreated/destroyed each frame (that churn was the single worst
+    // per-frame cost in the app) - the analyzer box's logical size never
+    // changes at runtime, so create-once-update-forever is safe.
+    SDL_Texture* texCardioSin = UploadTexture(renderer, cardioSinBuf);
+    SDL_Texture* texCardioDes = UploadTexture(renderer, cardioDesBuf);
     int cardioScrollIdx = 0;
     auto plotCardioColumn = [&](gfx::Image& buf, float level01) {
         const int y = std::clamp(buf.height - 1 - static_cast<int>(level01 * (buf.height - 1)), 0, buf.height - 1);
@@ -1513,6 +1540,22 @@ int main(int argc, char** argv) {
     app::SetPlaybackMenuChecked(playbackMenuState()); // reflect resumed Playback state immediately
 #endif
 
+    // Potato: "30 FPS" (frame budget, see the main loop below) and "Cheap
+    // Visualizer" (drawFrame's visPanel dispatch + the tray-icon tick
+    // below) - same shared-lambda shape as Effects/Playback above.
+    auto toggleLowFps = [&]() {
+        potatoLowFps = !potatoLowFps;
+#ifdef __APPLE__
+        app::SetPotatoMenuChecked(potatoMenuState());
+#endif
+    };
+    auto toggleCheapVisualizer = [&]() {
+        potatoCheapVisualizer = !potatoCheapVisualizer;
+#ifdef __APPLE__
+        app::SetPotatoMenuChecked(potatoMenuState());
+#endif
+    };
+
     auto handleUtilityPress = [&](UtilityAction action) {
         // Matches CommandImg(9).Enabled = analyzer.Visible - the SpecMode
         // button only cycles the analyzer's own 6 sub-modes while the
@@ -1615,7 +1658,7 @@ int main(int argc, char** argv) {
     // menu (Top: EFFECTS/PLAYBACK -> drills into either's own list),
     // mirroring the real macOS menu bar's Options>{Effects,Playback}
     // structure - see layout.h's kOptionsMenuTop*/kPlaybackMenu* comment.
-    enum class OptionsMenuLevel { Closed, Top, Effects, Playback };
+    enum class OptionsMenuLevel { Closed, Top, Effects, Playback, Potato };
     OptionsMenuLevel optionsMenuLevel = OptionsMenuLevel::Closed;
 #endif
 
@@ -1793,6 +1836,7 @@ int main(int argc, char** argv) {
     std::array<CachedTextTexture, kEffectsMenuItems> effectsMenuTextCache;
     std::array<CachedTextTexture, kOptionsMenuTopItems> optionsMenuTopTextCache;
     std::array<CachedTextTexture, kPlaybackMenuItems> playbackMenuTextCache;
+    std::array<CachedTextTexture, kPotatoMenuItems> potatoMenuTextCache;
 #endif
 
     auto drawFrame = [&]() {
@@ -2047,8 +2091,13 @@ int main(int argc, char** argv) {
             // VisPanel::Analyzer's own 6 SpecMode sub-modes - only drawn
             // while the analyzer itself is the panel showing; IdleLogo/
             // CardioOSC (below) share this same box for the other two
-            // states in the 3-way click cycle.
-            if (visPanel == VisPanel::Analyzer) {
+            // states in the 3-way click cycle. Potato > "Cheap Visualizer"
+            // skips the FFT analyzer and CardioOSC (the expensive paths)
+            // and forces the cheap static IdleLogo in their place instead
+            // of leaving the box blank - visPanel/visMode keep updating
+            // underneath and the user's actual selection resumes the
+            // instant it's off.
+            if (!potatoCheapVisualizer && visPanel == VisPanel::Analyzer) {
             const bool barMode = visMode == VisMode::PeakFalls || visMode == VisMode::NoPeakFalls ||
                                   visMode == VisMode::PeakNoFalls || visMode == VisMode::FadeFft;
             if (barMode) {
@@ -2229,7 +2278,7 @@ int main(int argc, char** argv) {
                     SDL_RenderDrawLine(renderer, kAnalyzerX, midY, kAnalyzerX + kAnalyzerW, midY);
                 }
             }
-            } else if (visPanel == VisPanel::IdleLogo) {
+            } else if (potatoCheapVisualizer || visPanel == VisPanel::IdleLogo) {
                 // The static skull/"XmP" branding image (ImgLogo,
                 // "CPULESS" in the original's config). Stretched
                 // (ImgLogo.Stretch = True) but NOT into the analyzer's own
@@ -2274,12 +2323,10 @@ int main(int argc, char** argv) {
                         std::fill(cardioDesBuf.rgba.begin(), cardioDesBuf.rgba.end(), 0);
                     }
                 }
-                SDL_Texture* tSin = UploadTexture(renderer, cardioSinBuf);
-                SDL_Texture* tDes = UploadTexture(renderer, cardioDesBuf);
-                DrawTextureAt(renderer, tSin, sinTraceX, kAnalyzerY);
-                DrawTextureAt(renderer, tDes, desTraceX, kAnalyzerY);
-                SDL_DestroyTexture(tSin);
-                SDL_DestroyTexture(tDes);
+                SDL_UpdateTexture(texCardioSin, nullptr, cardioSinBuf.rgba.data(), kCardioTraceW * 4);
+                SDL_UpdateTexture(texCardioDes, nullptr, cardioDesBuf.rgba.data(), kCardioTraceW * 4);
+                DrawTextureAt(renderer, texCardioSin, sinTraceX, kAnalyzerY);
+                DrawTextureAt(renderer, texCardioDes, desTraceX, kAnalyzerY);
             }
         }
 
@@ -2431,7 +2478,7 @@ int main(int argc, char** argv) {
         // this hand-rolled dropdown instead of Cocoa's native nesting.
         if (optionsMenuLevel == OptionsMenuLevel::Top) {
             Bevel::Draw(renderer, kOptionsMenuTopX, kOptionsMenuTopY, kOptionsMenuTopW, kOptionsMenuTopH);
-            static const char* kOptionsTopLabels[kOptionsMenuTopItems] = {"EFFECTS", "PLAYBACK"};
+            static const char* kOptionsTopLabels[kOptionsMenuTopItems] = {"EFFECTS", "PLAYBACK", "POTATO"};
             for (int i = 0; i < kOptionsMenuTopItems; ++i) {
                 const int iy = kOptionsMenuTopY + i * kOptionsMenuItemH;
                 const int fieldWidth =
@@ -2478,6 +2525,24 @@ int main(int argc, char** argv) {
                               playbackMenuTextCache[static_cast<size_t>(i)].Get(renderer, font,
                                                                                  kPlaybackMenuLabels[i], fieldWidth),
                               kPlaybackMenuX + 2, iy + (kOptionsMenuItemH - gfx::BitmapFont::kCellH) / 2);
+            }
+        } else if (optionsMenuLevel == OptionsMenuLevel::Potato) {
+            Bevel::Draw(renderer, kPotatoMenuX, kPotatoMenuY, kPotatoMenuW, kPotatoMenuH);
+            static const char* kPotatoMenuLabels[kPotatoMenuItems] = {"30 FPS", "CHEAP VIS"};
+            const bool potatoOn[kPotatoMenuItems] = {potatoLowFps, potatoCheapVisualizer};
+            for (int i = 0; i < kPotatoMenuItems; ++i) {
+                const int iy = kPotatoMenuY + i * kOptionsMenuItemH;
+                if (potatoOn[i]) {
+                    SDL_SetRenderDrawColor(renderer, 0x1a, 0x5a, 0x2a, 255);
+                    SDL_Rect hi{kPotatoMenuX + 1, iy, kPotatoMenuW - 2, kOptionsMenuItemH};
+                    SDL_RenderFillRect(renderer, &hi);
+                }
+                const int fieldWidth =
+                    static_cast<int>(std::strlen(kPotatoMenuLabels[i])) * gfx::BitmapFont::kCellW;
+                DrawTextureAt(renderer,
+                              potatoMenuTextCache[static_cast<size_t>(i)].Get(renderer, font,
+                                                                               kPotatoMenuLabels[i], fieldWidth),
+                              kPotatoMenuX + 2, iy + (kOptionsMenuItemH - gfx::BitmapFont::kCellH) / 2);
             }
         }
 #endif
@@ -3855,6 +3920,13 @@ int main(int argc, char** argv) {
                 case app::PlaybackMenuAction::ToggleRandom: toggleRandom(); break;
             }
         }
+        // Posted by main_menu.mm's Potato-menu items.
+        if (ev.type == kPotatoEventType) {
+            switch (static_cast<app::PotatoMenuAction>(ev.user.code)) {
+                case app::PotatoMenuAction::ToggleLowFps: toggleLowFps(); break;
+                case app::PotatoMenuAction::ToggleCheapVisualizer: toggleCheapVisualizer(); break;
+            }
+        }
 #else
         // TODO: "when the main window is minimized or maximized all the
         // windows should minimize or maximize". Symmetric across all four
@@ -4056,6 +4128,7 @@ int main(int argc, char** argv) {
                     const int item = hit ? (ly - kOptionsMenuTopY) / kOptionsMenuItemH : -1;
                     optionsMenuLevel = (item == 0)   ? OptionsMenuLevel::Effects
                                         : (item == 1) ? OptionsMenuLevel::Playback
+                                        : (item == 2) ? OptionsMenuLevel::Potato
                                                        : OptionsMenuLevel::Closed;
                 } else if (optionsMenuLevel == OptionsMenuLevel::Effects) {
                     optionsMenuLevel = OptionsMenuLevel::Closed;
@@ -4076,6 +4149,15 @@ int main(int argc, char** argv) {
                         switch (item) {
                             case 0: toggleRepeat(); break;
                             case 1: toggleRandom(); break;
+                        }
+                    }
+                } else if (optionsMenuLevel == OptionsMenuLevel::Potato) {
+                    optionsMenuLevel = OptionsMenuLevel::Closed;
+                    if (inRect(lx, ly, kPotatoMenuX, kPotatoMenuY, kPotatoMenuW, kPotatoMenuH)) {
+                        const int item = (ly - kPotatoMenuY) / kOptionsMenuItemH;
+                        switch (item) {
+                            case 0: toggleLowFps(); break;
+                            case 1: toggleCheapVisualizer(); break;
                         }
                     }
                 } else if (inRect(lx, ly, kViewToggleX, kViewToggleY, kViewToggleW, kViewToggleH)) {
@@ -4590,6 +4672,16 @@ int main(int argc, char** argv) {
         }
 #ifdef __APPLE__
         else if (appHiddenToTray) {
+            // Potato > "Cheap Visualizer" disables the tray-icon visualizer
+            // entirely (not just letting it degrade further) - skips the
+            // second traySpectrumAnalyzer FFT and every NSImage allocation
+            // below, clearing any icon left over from before it was toggled on.
+            if (potatoCheapVisualizer) {
+                if (trayWasAnimating) {
+                    app::ClearMenuBarVisualizer();
+                    trayWasAnimating = false;
+                }
+            } else {
             // 60fps loop / 4 ~= 15fps pushed into Cocoa - plenty smooth
             // for an ~8-bar/20-sample status-item icon, without hammering
             // AppKit every frame while minimized.
@@ -4634,6 +4726,7 @@ int main(int argc, char** argv) {
                     app::ClearMenuBarVisualizer();
                     trayWasAnimating = false;
                 }
+            }
             }
         }
 #endif
@@ -4683,8 +4776,10 @@ int main(int argc, char** argv) {
         // pegging a full core at ~85% even at idle. 60fps keeps animation
         // (marquee, spectrum falls/decay, which are tuned in pixels-per-
         // redraw-tick, not delta-time) smooth while giving the CPU back
-        // between frames.
-        constexpr Uint32 kFrameBudgetMs = 1000 / 60;
+        // between frames. Potato > "30 FPS" halves this budget - all of
+        // that pixels-per-tick-tuned animation simply moves at half speed
+        // under 30fps, which is expected/acceptable for a low-resource mode.
+        const Uint32 kFrameBudgetMs = potatoLowFps ? (1000 / 30) : (1000 / 60);
         const Uint32 elapsed = SDL_GetTicks() - frameStart;
         if (elapsed < kFrameBudgetMs) SDL_Delay(kFrameBudgetMs - elapsed);
     }
@@ -4717,6 +4812,8 @@ int main(int argc, char** argv) {
         toSave.visPanel = static_cast<int>(visPanel);
         toSave.perSongEq = perSongEqEnabled;
         toSave.uiScalePercent = uiScalePercent;
+        toSave.potatoLowFps = potatoLowFps;
+        toSave.potatoCheapVisualizer = potatoCheapVisualizer;
         for (int b = 0; b < audio::Equalizer::kBands; ++b) {
             toSave.eqBands[static_cast<size_t>(b)] = engine.EqBand(b);
         }

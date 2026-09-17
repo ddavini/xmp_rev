@@ -36,6 +36,8 @@ std::string SerializeSettings(const Settings& s) {
     out << "VISPANEL=" << s.visPanel << "\n";
     out << "PERSONGEQ=" << (s.perSongEq ? 1 : 0) << "\n";
     out << "UISCALE=" << s.uiScalePercent << "\n";
+    out << "POTATOFPS=" << (s.potatoLowFps ? 1 : 0) << "\n";
+    out << "POTATOVIS=" << (s.potatoCheapVisualizer ? 1 : 0) << "\n";
     return out.str();
 }
 
@@ -67,6 +69,8 @@ bool ParseSettings(const std::string& text, Settings& out) {
             else if (key == "EQPRESET") out.eqPreset = std::stoi(value);
             else if (key == "PERSONGEQ") out.perSongEq = std::stoi(value) != 0;
             else if (key == "UISCALE") out.uiScalePercent = std::stoi(value);
+            else if (key == "POTATOFPS") out.potatoLowFps = std::stoi(value) != 0;
+            else if (key == "POTATOVIS") out.potatoCheapVisualizer = std::stoi(value) != 0;
             else if (key == "EQBANDS") {
                 // Comma-separated, same tolerant spirit as the rest of
                 // this parser: fewer/more fields than expected just fills
