@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 
 // macOS-only: appends "View" and "Effects" menus onto NSApp's existing
 // mainMenu - deliberately does NOT replace/rebuild mainMenu itself, since
@@ -128,5 +129,17 @@ struct PotatoMenuState {
 // after InstallOptionsMenu with the resumed/initial state, and again every
 // time either is toggled (from a menu or a resumed session).
 void SetPotatoMenuChecked(const PotatoMenuState& state);
+
+// Cocoa's native menu tracking - opening any menu bar item (View/Options/
+// etc.) or a popup context menu (the tray icon's right-click popup) -
+// runs its own nested run loop on the main thread for as long as the menu
+// stays open, which our own main() loop does not get to run during, so
+// the window/visualizer appear frozen until the menu closes. Registers a
+// callback that's invoked periodically (via an NSTimer scheduled only in
+// NSEventTrackingRunLoopMode, so it's a no-op outside of menu tracking -
+// zero overhead the rest of the time) for as long as any menu anywhere in
+// the app is tracking, so the caller can keep redrawing/animating during
+// that window instead. Call once, any time after SDL_Init.
+void SetMenuTrackingRedrawCallback(std::function<void()> callback);
 
 } // namespace xmad::app

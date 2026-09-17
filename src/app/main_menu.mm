@@ -3,6 +3,7 @@
 
 #import <Cocoa/Cocoa.h>
 #include <SDL2/SDL.h>
+#include <functional>
 #include <unordered_map>
 #include <vector>
 
@@ -26,6 +27,49 @@
     ev.type = self.eventType;
     ev.user.code = static_cast<Sint32>([sender tag]);
     SDL_PushEvent(&ev);
+}
+@end
+
+namespace {
+// Backing state for SetMenuTrackingRedrawCallback (see main_menu.h's
+// comment on it). gMenuTrackingDepth (not a plain bool) tracks nested
+// tracking sessions (e.g. Options -> Potato submenu) so the timer only
+// stops once every level has closed.
+std::function<void()> gMenuTrackingRedrawCallback;
+NSTimer* gMenuTrackingTimer = nil;
+int gMenuTrackingDepth = 0;
+id gMenuTrackingObserver = nil; // XmadMenuTrackingObserver*, declared further below
+} // namespace
+
+// Listens app-wide for any NSMenu beginning/ending tracking (menu bar
+// items and popup context menus alike) and runs a timer only for that
+// window, in NSEventTrackingRunLoopMode specifically - a mode our own
+// main() loop never runs in, and one Cocoa keeps servicing during
+// tracking, unlike the default run loop mode our SDL loop relies on.
+@interface XmadMenuTrackingObserver : NSObject
+- (void)menuDidBeginTracking:(NSNotification*)note;
+- (void)menuDidEndTracking:(NSNotification*)note;
+@end
+
+@implementation XmadMenuTrackingObserver
+- (void)menuDidBeginTracking:(NSNotification*)note {
+    (void)note;
+    if (gMenuTrackingDepth++ == 0) {
+        gMenuTrackingTimer = [NSTimer timerWithTimeInterval:1.0 / 30.0
+                                                     repeats:YES
+                                                       block:^(NSTimer* timer) {
+            (void)timer;
+            if (gMenuTrackingRedrawCallback) gMenuTrackingRedrawCallback();
+        }];
+        [[NSRunLoop mainRunLoop] addTimer:gMenuTrackingTimer forMode:NSEventTrackingRunLoopMode];
+    }
+}
+- (void)menuDidEndTracking:(NSNotification*)note {
+    (void)note;
+    if (gMenuTrackingDepth > 0 && --gMenuTrackingDepth == 0) {
+        [gMenuTrackingTimer invalidate];
+        gMenuTrackingTimer = nil;
+    }
 }
 @end
 
@@ -253,6 +297,23 @@ void SetPotatoMenuChecked(const PotatoMenuState& state) {
         };
         apply(PotatoMenuAction::ToggleLowFps, state.lowFps);
         apply(PotatoMenuAction::ToggleCheapVisualizer, state.cheapVisualizer);
+    }
+}
+
+void SetMenuTrackingRedrawCallback(std::function<void()> callback) {
+    @autoreleasepool {
+        gMenuTrackingRedrawCallback = std::move(callback);
+        if (gMenuTrackingObserver) return; // idempotent, same spirit as InstallOptionsMenu
+        XmadMenuTrackingObserver* observer = [[XmadMenuTrackingObserver alloc] init];
+        gMenuTrackingObserver = observer;
+        [[NSNotificationCenter defaultCenter] addObserver:observer
+                                                  selector:@selector(menuDidBeginTracking:)
+                                                      name:NSMenuDidBeginTrackingNotification
+                                                    object:nil];
+        [[NSNotificationCenter defaultCenter] addObserver:observer
+                                                  selector:@selector(menuDidEndTracking:)
+                                                      name:NSMenuDidEndTrackingNotification
+                                                    object:nil];
     }
 }
 

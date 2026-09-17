@@ -2548,6 +2548,21 @@ int main(int argc, char** argv) {
 #endif
     };
 
+#ifdef __APPLE__
+    // Cocoa's native menu tracking (any menu bar item, or the tray icon's
+    // right-click popup) runs its own nested run loop on the main thread
+    // that this file's own `while (running)` loop below never gets to run
+    // during - so without this, the window/visualizer just freeze for as
+    // long as a menu stays open. Keeps redrawing the main window during
+    // that window instead (see app/main_menu.h's SetMenuTrackingRedrawCallback).
+    app::SetMenuTrackingRedrawCallback([&]() {
+        if (!mainMinimized) {
+            drawFrame();
+            SDL_RenderPresent(renderer);
+        }
+    });
+#endif
+
     // ---- playlist window (Listone.frm) ----
     SDL_Texture* plTexClear = UploadTexture(plRenderer, skin.plClear);
     SDL_Texture* plTexDelete = UploadTexture(plRenderer, skin.plDelete);
