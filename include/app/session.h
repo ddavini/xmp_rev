@@ -81,6 +81,15 @@ struct Settings {
     // prefs, not playback state.
     bool potatoLowFps = false;          // Potato > "30 FPS": halves the render loop's frame cap
     bool potatoCheapVisualizer = false; // Potato > "Cheap Visualizer": forces VU/peak-bar-only rendering
+    // Potato > "Force Software Rendering": opts back out of the GPU-
+    // accelerated SDL renderer (see main.cpp's CreatePreferredRenderer) in
+    // favor of the old CPU-side software one - an escape hatch for a
+    // GPU/driver combo that misbehaves under acceleration, not something
+    // meant to be toggled routinely. Read only at startup (renderers are
+    // created once, long before any settings-menu interaction is possible),
+    // so unlike the two flags above this one takes effect on next launch,
+    // not live - the menu label says so.
+    bool forceSoftwareRenderer = false;
 };
 
 // Pure parsing/serialization - no filesystem access, so directly

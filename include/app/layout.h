@@ -145,7 +145,7 @@ constexpr int kPlaybackMenuY = kEffectsToggleY - kPlaybackMenuH;
 // New (not in the original): low-resource toggles for underpowered/older
 // machines - see main.cpp's kFrameBudgetMs and drawFrame's visPanel
 // dispatch. Same leaf-menu geometry convention as kPlaybackMenu* above.
-constexpr int kPotatoMenuItems = 2; // 30 FPS, Cheap Visualizer
+constexpr int kPotatoMenuItems = 3; // 30 FPS, Cheap Visualizer, Force Software Rendering
 constexpr int kPotatoMenuW = kEffectsMenuW;
 constexpr int kPotatoMenuH = kOptionsMenuItemH * kPotatoMenuItems;
 constexpr int kPotatoMenuX = kEffectsToggleX;

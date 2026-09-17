@@ -81,6 +81,40 @@ SDL_Surface* BuildIconSurface(const gfx::Image& img) {
 }
 #endif
 
+// Prefers a GPU-accelerated renderer: these windows used to be plain
+// SDL_RENDERER_SOFTWARE (simple 2D sprite blits, "no need for GPU
+// acceleration" was the original reasoning here) - but profiling showed
+// SDL_RenderPresent uploads the whole software-rendered surface to a
+// GPU-backed texture on every call regardless (see SESSION_STATUS.md's CPU
+// section), so software rendering was paying for CPU-side blitting *and*
+// that upload. Accelerated lets the GPU do the blit/compositing work
+// directly instead.
+//
+// forceSoftware keeps a path on the old software renderer for two cases:
+// (1) the headless --dump-*-frame debug/test paths (passed as
+// dumpingAnyFrameEarly by every call site below) - this project's dev
+// sandbox has no real display, and SDL_RenderReadPixels against an
+// accelerated renderer produces blank/unreadable output there, while
+// software rendering works headlessly, and pixel-exact dump comparisons are
+// this project's whole test discipline; (2) Potato > "Force Software
+// Rendering" (passed as forceSoftwareRenderer), a persisted user opt-out for
+// a GPU/driver combo that misbehaves under acceleration - read once at
+// startup, so it can't take effect until the next launch, but that's an
+// acceptable trade for not having to destroy/recreate every renderer and
+// texture live.
+//
+// Falls back to software if accelerated creation itself fails (e.g. some
+// unusual driver/context limit), so the app still launches rather than
+// hard-erroring on a machine where hardware acceleration isn't available.
+SDL_Renderer* CreatePreferredRenderer(SDL_Window* window, bool forceSoftware) {
+    if (!forceSoftware) {
+        if (SDL_Renderer* r = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED)) return r;
+        std::cerr << "SDL_CreateRenderer(ACCELERATED) failed (" << SDL_GetError()
+                  << "), falling back to software\n";
+    }
+    return SDL_CreateRenderer(window, -1, SDL_RENDERER_SOFTWARE);
+}
+
 // SDL_WINDOW_ALLOW_HIGHDPI windows report their *size* in points (what we
 // pass to SDL_CreateWindow, and what mouse-event coordinates use), but the
 // renderer's actual backing store on a Retina display is bigger (2x, on
@@ -756,12 +790,17 @@ int main(int argc, char** argv) {
     int uiScalePercent = 100;
     bool potatoLowFps = false;
     bool potatoCheapVisualizer = false;
+    // Potato > "Force Software Rendering": read here too (not just at
+    // renderer-creation time below) so it's available for potatoMenuState()
+    // and the menu's initial checkmark, same as the other two Potato flags.
+    bool forceSoftwareRenderer = false;
     {
         app::Settings scalePrefs;
         if (app::LoadSettingsFile(app::SettingsFilePath(), scalePrefs)) {
             uiScalePercent = SnapUiScalePercent(scalePrefs.uiScalePercent);
             potatoLowFps = scalePrefs.potatoLowFps;
             potatoCheapVisualizer = scalePrefs.potatoCheapVisualizer;
+            forceSoftwareRenderer = scalePrefs.forceSoftwareRenderer;
         }
     }
     const bool dumpingAnyFrameEarly = !dumpFramePath.empty() || !dumpPlaylistFramePath.empty() ||
@@ -815,11 +854,9 @@ int main(int argc, char** argv) {
     app::SetDockIconVisible(true);
 #endif
 
-    // Software renderer: these are simple 2D sprite blits (no need for GPU
-    // acceleration), and it draws into a CPU-side buffer that doesn't
-    // depend on a real compositor/display surface being attached - works
-    // the same whether there's a real window on screen or not.
-    SDL_Renderer* renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_SOFTWARE);
+    // See CreatePreferredRenderer's comment above for the accelerated/
+    // software split rationale.
+    SDL_Renderer* renderer = CreatePreferredRenderer(window, dumpingAnyFrameEarly || forceSoftwareRenderer);
     if (!renderer) {
         std::cerr << "SDL_CreateRenderer failed: " << SDL_GetError() << "\n";
         return 1;
@@ -844,7 +881,7 @@ int main(int argc, char** argv) {
         std::cerr << "SDL_CreateWindow (eq) failed: " << SDL_GetError() << "\n";
         return 1;
     }
-    SDL_Renderer* eqRenderer = SDL_CreateRenderer(eqWindow, -1, SDL_RENDERER_SOFTWARE);
+    SDL_Renderer* eqRenderer = CreatePreferredRenderer(eqWindow, dumpingAnyFrameEarly || forceSoftwareRenderer);
     if (!eqRenderer) {
         std::cerr << "SDL_CreateRenderer (eq) failed: " << SDL_GetError() << "\n";
         return 1;
@@ -858,7 +895,7 @@ int main(int argc, char** argv) {
         std::cerr << "SDL_CreateWindow (playlist) failed: " << SDL_GetError() << "\n";
         return 1;
     }
-    SDL_Renderer* plRenderer = SDL_CreateRenderer(plWindow, -1, SDL_RENDERER_SOFTWARE);
+    SDL_Renderer* plRenderer = CreatePreferredRenderer(plWindow, dumpingAnyFrameEarly || forceSoftwareRenderer);
     if (!plRenderer) {
         std::cerr << "SDL_CreateRenderer (playlist) failed: " << SDL_GetError() << "\n";
         return 1;
@@ -877,7 +914,7 @@ int main(int argc, char** argv) {
         std::cerr << "SDL_CreateWindow (info) failed: " << SDL_GetError() << "\n";
         return 1;
     }
-    SDL_Renderer* infoRenderer = SDL_CreateRenderer(infoWindow, -1, SDL_RENDERER_SOFTWARE);
+    SDL_Renderer* infoRenderer = CreatePreferredRenderer(infoWindow, dumpingAnyFrameEarly || forceSoftwareRenderer);
     if (!infoRenderer) {
         std::cerr << "SDL_CreateRenderer (info) failed: " << SDL_GetError() << "\n";
         return 1;
@@ -898,7 +935,7 @@ int main(int argc, char** argv) {
         std::cerr << "SDL_CreateWindow (about) failed: " << SDL_GetError() << "\n";
         return 1;
     }
-    SDL_Renderer* aboutRenderer = SDL_CreateRenderer(aboutWindow, -1, SDL_RENDERER_SOFTWARE);
+    SDL_Renderer* aboutRenderer = CreatePreferredRenderer(aboutWindow, dumpingAnyFrameEarly || forceSoftwareRenderer);
     if (!aboutRenderer) {
         std::cerr << "SDL_CreateRenderer (about) failed: " << SDL_GetError() << "\n";
         return 1;
@@ -1060,9 +1097,12 @@ int main(int argc, char** argv) {
     // Same reasoning as effectsMenuState above, for the Playback submenu.
     auto playbackMenuState = [&]() { return app::PlaybackMenuState{repeatEnabled, randomEnabled}; };
     // Same reasoning again, for the Potato submenu. potatoLowFps/
-    // potatoCheapVisualizer are declared earlier (the uiScalePercent-style
-    // early load block), so they're already in scope here.
-    auto potatoMenuState = [&]() { return app::PotatoMenuState{potatoLowFps, potatoCheapVisualizer}; };
+    // potatoCheapVisualizer/forceSoftwareRenderer are declared earlier (the
+    // uiScalePercent-style early load block), so they're already in scope
+    // here.
+    auto potatoMenuState = [&]() {
+        return app::PotatoMenuState{potatoLowFps, potatoCheapVisualizer, forceSoftwareRenderer};
+    };
 #endif
 
 #ifdef __APPLE__
@@ -1556,6 +1596,16 @@ int main(int argc, char** argv) {
     };
     auto toggleCheapVisualizer = [&]() {
         potatoCheapVisualizer = !potatoCheapVisualizer;
+#ifdef __APPLE__
+        app::SetPotatoMenuChecked(potatoMenuState());
+#endif
+    };
+    // Unlike the two toggles above, this one only affects renderer creation
+    // (see CreatePreferredRenderer, called long before this lambda exists),
+    // so flipping it here just persists the preference for next launch -
+    // the menu label says "(restart)" for exactly this reason.
+    auto toggleForceSoftwareRenderer = [&]() {
+        forceSoftwareRenderer = !forceSoftwareRenderer;
 #ifdef __APPLE__
         app::SetPotatoMenuChecked(potatoMenuState());
 #endif
@@ -2555,8 +2605,8 @@ int main(int argc, char** argv) {
             }
         } else if (optionsMenuLevel == OptionsMenuLevel::Potato) {
             Bevel::Draw(renderer, kPotatoMenuX, kPotatoMenuY, kPotatoMenuW, kPotatoMenuH);
-            static const char* kPotatoMenuLabels[kPotatoMenuItems] = {"30 FPS", "CHEAP VIS"};
-            const bool potatoOn[kPotatoMenuItems] = {potatoLowFps, potatoCheapVisualizer};
+            static const char* kPotatoMenuLabels[kPotatoMenuItems] = {"30 FPS", "CHEAP VIS", "FORCE SW"};
+            const bool potatoOn[kPotatoMenuItems] = {potatoLowFps, potatoCheapVisualizer, forceSoftwareRenderer};
             for (int i = 0; i < kPotatoMenuItems; ++i) {
                 const int iy = kPotatoMenuY + i * kOptionsMenuItemH;
                 if (potatoOn[i]) {
@@ -3989,6 +4039,7 @@ int main(int argc, char** argv) {
             switch (static_cast<app::PotatoMenuAction>(ev.user.code)) {
                 case app::PotatoMenuAction::ToggleLowFps: toggleLowFps(); break;
                 case app::PotatoMenuAction::ToggleCheapVisualizer: toggleCheapVisualizer(); break;
+                case app::PotatoMenuAction::ToggleForceSoftware: toggleForceSoftwareRenderer(); break;
             }
         }
 #else
@@ -4238,6 +4289,7 @@ int main(int argc, char** argv) {
                         switch (item) {
                             case 0: toggleLowFps(); break;
                             case 1: toggleCheapVisualizer(); break;
+                            case 2: toggleForceSoftwareRenderer(); break;
                         }
                     }
                 } else if (inRect(lx, ly, kViewToggleX, kViewToggleY, kViewToggleW, kViewToggleH)) {
@@ -4894,6 +4946,7 @@ int main(int argc, char** argv) {
         toSave.uiScalePercent = uiScalePercent;
         toSave.potatoLowFps = potatoLowFps;
         toSave.potatoCheapVisualizer = potatoCheapVisualizer;
+        toSave.forceSoftwareRenderer = forceSoftwareRenderer;
         for (int b = 0; b < audio::Equalizer::kBands; ++b) {
             toSave.eqBands[static_cast<size_t>(b)] = engine.EqBand(b);
         }

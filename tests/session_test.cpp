@@ -49,6 +49,7 @@ int main() {
         s.uiScalePercent = 125;
         s.potatoLowFps = true;
         s.potatoCheapVisualizer = true;
+        s.forceSoftwareRenderer = true;
         const std::string text = SerializeSettings(s);
 
         Settings parsed;
@@ -74,6 +75,7 @@ int main() {
         Check(parsed.uiScalePercent == 125, "round-trip: uiScalePercent");
         Check(parsed.potatoLowFps == true, "round-trip: potatoLowFps");
         Check(parsed.potatoCheapVisualizer == true, "round-trip: potatoCheapVisualizer");
+        Check(parsed.forceSoftwareRenderer == true, "round-trip: forceSoftwareRenderer");
     }
 
     // wasPaused round-trips independently of wasPlaying - the fix for
@@ -143,6 +145,7 @@ int main() {
         Check(parsed.uiScalePercent == 100, "missing key keeps default (uiScalePercent)");
         Check(parsed.potatoLowFps == false, "missing key keeps default (potatoLowFps)");
         Check(parsed.potatoCheapVisualizer == false, "missing key keeps default (potatoCheapVisualizer)");
+        Check(parsed.forceSoftwareRenderer == false, "missing key keeps default (forceSoftwareRenderer)");
     }
 
     // EQBANDS tolerates fewer fields than expected (fills what's present,

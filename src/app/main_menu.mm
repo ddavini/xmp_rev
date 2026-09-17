@@ -203,6 +203,11 @@ NSMenu* BuildPotatoMenu(uint32_t potatoEventType) {
         };
         addToggle(@"30 FPS", PotatoMenuAction::ToggleLowFps);
         addToggle(@"Cheap Visualizer", PotatoMenuAction::ToggleCheapVisualizer);
+        // Unlike the two above, this one is only read at startup (see
+        // CreatePreferredRenderer in main.cpp) - toggling it just persists
+        // the preference for next launch, it can't rebuild an already-
+        // created SDL_Renderer live.
+        addToggle(@"Force Software Rendering (restart)", PotatoMenuAction::ToggleForceSoftware);
         return potatoMenu;
     }
 }
@@ -297,6 +302,7 @@ void SetPotatoMenuChecked(const PotatoMenuState& state) {
         };
         apply(PotatoMenuAction::ToggleLowFps, state.lowFps);
         apply(PotatoMenuAction::ToggleCheapVisualizer, state.cheapVisualizer);
+        apply(PotatoMenuAction::ToggleForceSoftware, state.forceSoftwareRenderer);
     }
 }
 

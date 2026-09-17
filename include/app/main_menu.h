@@ -116,18 +116,21 @@ void SetPlaybackMenuChecked(const PlaybackMenuState& state);
 enum class PotatoMenuAction : int32_t {
     ToggleLowFps = 0,
     ToggleCheapVisualizer = 1,
+    ToggleForceSoftware = 2,
 };
 
-// Bundles both Potato toggle states in one call, same reasoning as
+// Bundles all three Potato toggle states in one call, same reasoning as
 // PlaybackMenuState above.
 struct PotatoMenuState {
     bool lowFps = false;
     bool cheapVisualizer = false;
+    bool forceSoftwareRenderer = false;
 };
 
-// Updates the "30 FPS"/"Cheap Visualizer" items' checkmarks - call once
-// after InstallOptionsMenu with the resumed/initial state, and again every
-// time either is toggled (from a menu or a resumed session).
+// Updates the "30 FPS"/"Cheap Visualizer"/"Force Software Rendering" items'
+// checkmarks - call once after InstallOptionsMenu with the resumed/initial
+// state, and again every time one is toggled (from a menu or a resumed
+// session).
 void SetPotatoMenuChecked(const PotatoMenuState& state);
 
 // Cocoa's native menu tracking - opening any menu bar item (View/Options/
