@@ -1433,6 +1433,29 @@ int main(int argc, char** argv) {
     dsp::SpectrumAnalyzer traySpectrumAnalyzer(kFftPoints, dsp::Window::Hanning);
     int trayTickCounter = 0;
     bool trayWasAnimating = false;
+    // Dirty-check for the tray icon itself, same spirit as the PL/EQ/Info
+    // window dirty-checks (see the frame-cap CPU section) - UpdateMenuBarVisualizer
+    // allocates a fresh NSImage + drawingHandler block and reassigns the
+    // status item's image every call, all pure AppKit/CPU work with no
+    // relation to SDL's renderer, so it wasn't touched by the switch to
+    // SDL_RENDERER_ACCELERATED and is worth skipping when the icon
+    // wouldn't visibly change anyway (e.g. a near-silent passage).
+    std::vector<float> lastTraySentLevels;
+    bool lastTraySentOscilloscope = false;
+    auto maybeUpdateTrayVisualizer = [&](const std::vector<float>& levels, bool oscilloscope) {
+        // 1/64th of the full [-1,1] or [0,1] range - small enough that any
+        // genuinely audible change still redraws, large enough to absorb
+        // float noise between two frames that are perceptually identical
+        // at a 20x14px icon size.
+        constexpr float kTrayLevelEpsilon = 1.0f / 64.0f;
+        const bool unchanged = lastTraySentOscilloscope == oscilloscope && lastTraySentLevels.size() == levels.size() &&
+                                std::equal(levels.begin(), levels.end(), lastTraySentLevels.begin(),
+                                           [](float a, float b) { return std::fabs(a - b) < kTrayLevelEpsilon; });
+        if (unchanged) return;
+        app::UpdateMenuBarVisualizer(levels.data(), static_cast<int>(levels.size()), oscilloscope);
+        lastTraySentLevels = levels;
+        lastTraySentOscilloscope = oscilloscope;
+    };
 #endif
 
     // Transport row hit-test table, in the same left-to-right order they're
@@ -4812,6 +4835,10 @@ int main(int argc, char** argv) {
                 if (trayWasAnimating) {
                     app::ClearMenuBarVisualizer();
                     trayWasAnimating = false;
+                    // Invalidates the dirty-check cache so a real playback
+                    // restart afterward can't coincidentally compare equal
+                    // to stale pre-clear levels and skip its first redraw.
+                    lastTraySentLevels.clear();
                 }
             } else {
             // 60fps loop / 4 ~= 15fps pushed into Cocoa - plenty smooth
@@ -4834,7 +4861,7 @@ int main(int argc, char** argv) {
                             for (int c = 0; c < snapChannels; ++c) s += snap[static_cast<size_t>(idx) * snapChannels + c];
                             trayLevels[static_cast<size_t>(i)] = std::clamp(s / snapChannels, -1.0f, 1.0f);
                         }
-                        app::UpdateMenuBarVisualizer(trayLevels.data(), kTrayWaveSamples, true);
+                        maybeUpdateTrayVisualizer(trayLevels, true);
                     } else {
                         for (int i = 0; i < kFftPoints; ++i) {
                             float s = 0.0f;
@@ -4851,12 +4878,13 @@ int main(int argc, char** argv) {
                                 peakDb = std::max(peakDb, spec[static_cast<size_t>(bin)]);
                             trayLevels[static_cast<size_t>(bar)] = std::clamp((peakDb + 60.0f) / 60.0f, 0.0f, 1.0f);
                         }
-                        app::UpdateMenuBarVisualizer(trayLevels.data(), kTrayBarCount, false);
+                        maybeUpdateTrayVisualizer(trayLevels, false);
                     }
                     trayWasAnimating = true;
                 } else if (trayWasAnimating) {
                     app::ClearMenuBarVisualizer();
                     trayWasAnimating = false;
+                    lastTraySentLevels.clear(); // same reasoning as the Cheap Visualizer clear above
                 }
             }
             }
