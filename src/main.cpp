@@ -1421,21 +1421,26 @@ int main(int argc, char** argv) {
     // -1,-1 = not currently hovering the main window at all.
     int mainMouseX = -1, mainMouseY = -1;
 
-    // Utility row (ShowVol/Mute/SpecMode/Info - CommandImg indices 7/8/9/6).
-    // Only SpecMode does anything real for now; the other three stay
-    // decorative (documented, not silently dropped).
-    enum class UtilityAction { ShowVol, Mute, SpecMode, Info };
+    // Utility row (FullPotato/Mute/SpecMode/Info - CommandImg indices 7/8/9/6).
+    // FullPotato was ShowVol (an unwired repurposing of the original's
+    // floating-volume-window button - see layout.h's kShowVolX comment).
+    enum class UtilityAction { FullPotato, Mute, SpecMode, Info };
     struct UtilityButton {
         SDL_Rect rect;
         UtilityAction action;
     };
     const std::array<UtilityButton, 4> utilityButtons = {
-        UtilityButton{SDL_Rect{kShowVolX, kShowVolY, kTransportBtnW, kTransportBtnH}, UtilityAction::ShowVol},
+        UtilityButton{SDL_Rect{kShowVolX, kShowVolY, kTransportBtnW, kTransportBtnH}, UtilityAction::FullPotato},
         UtilityButton{SDL_Rect{kMuteX, kMuteY, kTransportBtnW, kTransportBtnH}, UtilityAction::Mute},
         UtilityButton{SDL_Rect{kSpecModeX, kSpecModeY, kTransportBtnW, kTransportBtnH}, UtilityAction::SpecMode},
         UtilityButton{SDL_Rect{kInfoX, kInfoY, kTransportBtnW, kTransportBtnH}, UtilityAction::Info},
     };
     int pressedUtility = -1;
+    // Warns before UtilityAction::FullPotato turns Potato mode on, since
+    // there's no persistent on-screen indicator that it's active (see
+    // layout.h's kPotatoConfirm* and the draw/hit-test blocks below).
+    bool potatoConfirmOpen = false;
+    std::array<CachedTextTexture, kPotatoConfirmItems> potatoConfirmTextCache;
     bool volDragging = false; // true while the volume slider thumb is being dragged
     bool seekDragging = false; // true while the seek bar thumb is being dragged
 
@@ -1555,6 +1560,17 @@ int main(int argc, char** argv) {
         app::SetPotatoMenuChecked(potatoMenuState());
 #endif
     };
+    // The FullPotato utility button's actual effect, run only after the
+    // confirmation popup's YES (see potatoConfirmOpen below) - force-sets
+    // both flags on regardless of their current state, unlike the two
+    // toggles above, so a stale prior state can't leave only one engaged.
+    auto engageFullPotato = [&]() {
+        potatoLowFps = true;
+        potatoCheapVisualizer = true;
+#ifdef __APPLE__
+        app::SetPotatoMenuChecked(potatoMenuState());
+#endif
+    };
 
     auto handleUtilityPress = [&](UtilityAction action) {
         // Matches CommandImg(9).Enabled = analyzer.Visible - the SpecMode
@@ -1569,8 +1585,19 @@ int main(int argc, char** argv) {
             engine.SetMuted(!engine.IsMuted());
         } else if (action == UtilityAction::Info) {
             toggleSecondaryWindow(infoWindow, infoUserVisible, infoMinimized);
+        } else if (action == UtilityAction::FullPotato) {
+            if (potatoLowFps && potatoCheapVisualizer) {
+                // Already fully engaged - one click disengages both; only
+                // turning it ON warrants a warning, not going back to normal.
+                potatoLowFps = false;
+                potatoCheapVisualizer = false;
+#ifdef __APPLE__
+                app::SetPotatoMenuChecked(potatoMenuState());
+#endif
+            } else {
+                potatoConfirmOpen = true;
+            }
         }
-        // ShowVol: no engine-side effect yet.
     };
 
     // Step per arrow click - proportionally similar to the EQ arrows' ~5% of
@@ -2546,6 +2573,28 @@ int main(int argc, char** argv) {
             }
         }
 #endif
+
+        // "Engage Full Potato Mode?" confirmation - unlike the Options
+        // dropdown above, this runs on both platforms (it's a plain main-
+        // window popup, not tied to the native/Linux menu split), so it's
+        // outside the __APPLE__ guard. Drawn last so it overlays whatever
+        // else is underneath, same convention as the dropdowns above.
+        if (potatoConfirmOpen) {
+            Bevel::Draw(renderer, kPotatoConfirmX, kPotatoConfirmY, kPotatoConfirmW, kPotatoConfirmH);
+            static const char* kPotatoConfirmLabels[kPotatoConfirmItems] = {"FULL POTATO?", "YES", "NO"};
+            for (int i = 0; i < kPotatoConfirmItems; ++i) {
+                const int iy = kPotatoConfirmY + i * kPotatoConfirmItemH;
+                const int fieldWidth =
+                    static_cast<int>(std::strlen(kPotatoConfirmLabels[i])) * gfx::BitmapFont::kCellW;
+                DrawTextureAt(renderer,
+                              potatoConfirmTextCache[static_cast<size_t>(i)].Get(renderer, font,
+                                                                                  kPotatoConfirmLabels[i], fieldWidth),
+                              kPotatoConfirmX + 2, iy + (kPotatoConfirmItemH - gfx::BitmapFont::kCellH) / 2);
+            }
+            SDL_SetRenderDrawColor(renderer, 0x23, 0x26, 0x20, 255);
+            SDL_RenderDrawLine(renderer, kPotatoConfirmX + 1, kPotatoConfirmY + kPotatoConfirmItemH,
+                                kPotatoConfirmX + kPotatoConfirmW - 2, kPotatoConfirmY + kPotatoConfirmItemH);
+        }
     };
 
 #ifdef __APPLE__
@@ -4108,6 +4157,22 @@ int main(int argc, char** argv) {
 
             const int lx = static_cast<int>(ev.button.x / scale), ly = static_cast<int>(ev.button.y / scale);
             if (ev.button.windowID == mainWindowID) {
+                // Warns before UtilityAction::FullPotato turns Potato mode
+                // on - checked first, same "any click while open
+                // intercepts, never falls through" rule as ejectMenuOpen
+                // etc. below, since this popup can overlap other controls.
+                if (potatoConfirmOpen) {
+                    potatoConfirmOpen = false;
+                    if (inRect(lx, ly, kPotatoConfirmX, kPotatoConfirmY, kPotatoConfirmW, kPotatoConfirmH)) {
+                        const int item = (ly - kPotatoConfirmY) / kPotatoConfirmItemH;
+                        if (item == 1) {
+                            engageFullPotato();
+                        } else if (item == 0) {
+                            potatoConfirmOpen = true; // inert label row, re-open
+                        }
+                        // item == 2 (NO): falls through, already closed.
+                    }
+                } else
 #ifndef __APPLE__
                 // Linux twins of the macOS View/Effects NSMenu items - same
                 // "any click while open closes it, click-inside dispatches"

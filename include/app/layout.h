@@ -37,10 +37,31 @@ constexpr int kEjectMenuY = kTransportY - kEjectMenuH;
 
 // Utility toggles (CommandImg indices 6-9) keep their .frm design-time
 // positions - Form_Load never reflows these.
+// kShowVolX/Y: in the original this opened a floating LED volume readout
+// window (frmVolume) - dropped as a separate window here, and the button
+// itself went unwired. Repurposed at the user's explicit request as the
+// "Full Potato Mode" toggle (see UtilityAction::FullPotato in main.cpp) -
+// a deliberate behavior substitution on an existing control, not a new
+// button, same as kLiteX's maximize repurposing above.
 constexpr int kShowVolX = 143, kShowVolY = 72;
 constexpr int kMuteX = 168, kMuteY = 72;
 constexpr int kSpecModeX = 168, kSpecModeY = 88;
 constexpr int kInfoX = 168, kInfoY = 104;
+
+// "Engage Full Potato Mode?" confirmation popup for the button above -
+// there's no persistent on-screen indicator that Potato mode is active
+// (only the Options>Potato menu's checkmarks), so this warns before
+// turning it on rather than silently flipping both flags. Same
+// label+YES+NO dropdown-overlay shape as kPlClearConfirm* (Playlist
+// window), just anchored to kShowVolX/Y instead. Opens downward - unlike
+// kEjectMenu*/kOptionsMenuTop* above it, there's clear room below
+// kShowVolY within the 155px-tall main window.
+constexpr int kPotatoConfirmItems = 3; // label + YES + NO
+constexpr int kPotatoConfirmItemH = 12;
+constexpr int kPotatoConfirmW = 72; // fits "FULL POTATO?" (12 chars * 5px + margin)
+constexpr int kPotatoConfirmH = kPotatoConfirmItemH * kPotatoConfirmItems;
+constexpr int kPotatoConfirmX = kShowVolX;
+constexpr int kPotatoConfirmY = kShowVolY + kTransportBtnH + 2;
 
 constexpr int kLogoX = 8, kLogoY = 8;
 // LitePic: an upward-pointing triangle, the mirror image of PICMIN's
