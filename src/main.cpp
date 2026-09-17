@@ -790,6 +790,10 @@ int main(int argc, char** argv) {
     int uiScalePercent = 100;
     bool potatoLowFps = false;
     bool potatoCheapVisualizer = false;
+    // Potato > "Disable Tray Anim": macOS-only (see menu_bar_icon.h) -
+    // read/persisted here unconditionally like its siblings, but only ever
+    // consulted from the tray tick's __APPLE__ block below.
+    bool potatoDisableTrayAnim = false;
     // Potato > "Force Software Rendering": read here too (not just at
     // renderer-creation time below) so it's available for potatoMenuState()
     // and the menu's initial checkmark, same as the other two Potato flags.
@@ -800,6 +804,7 @@ int main(int argc, char** argv) {
             uiScalePercent = SnapUiScalePercent(scalePrefs.uiScalePercent);
             potatoLowFps = scalePrefs.potatoLowFps;
             potatoCheapVisualizer = scalePrefs.potatoCheapVisualizer;
+            potatoDisableTrayAnim = scalePrefs.potatoDisableTrayAnim;
             forceSoftwareRenderer = scalePrefs.forceSoftwareRenderer;
         }
     }
@@ -816,7 +821,8 @@ int main(int argc, char** argv) {
     double scale = uiScalePercent / 100.0;
 #ifdef __APPLE__
     app::SetUiScaleMenuChecked(uiScalePercent); // reflect a resumed non-default scale immediately
-    app::SetPotatoMenuChecked(app::PotatoMenuState{potatoLowFps, potatoCheapVisualizer}); // reflect loaded Potato prefs immediately
+    app::SetPotatoMenuChecked(app::PotatoMenuState{potatoLowFps, potatoCheapVisualizer, potatoDisableTrayAnim,
+                                                    forceSoftwareRenderer}); // reflect loaded Potato prefs immediately
 #endif
     // Borderless: matches the original's BorderStyle=0 (fully custom-drawn,
     // no OS title bar/chrome). This means there's no native close button or
@@ -1097,11 +1103,12 @@ int main(int argc, char** argv) {
     // Same reasoning as effectsMenuState above, for the Playback submenu.
     auto playbackMenuState = [&]() { return app::PlaybackMenuState{repeatEnabled, randomEnabled}; };
     // Same reasoning again, for the Potato submenu. potatoLowFps/
-    // potatoCheapVisualizer/forceSoftwareRenderer are declared earlier (the
-    // uiScalePercent-style early load block), so they're already in scope
-    // here.
+    // potatoCheapVisualizer/potatoDisableTrayAnim/forceSoftwareRenderer are
+    // declared earlier (the uiScalePercent-style early load block), so
+    // they're already in scope here.
     auto potatoMenuState = [&]() {
-        return app::PotatoMenuState{potatoLowFps, potatoCheapVisualizer, forceSoftwareRenderer};
+        return app::PotatoMenuState{potatoLowFps, potatoCheapVisualizer, potatoDisableTrayAnim,
+                                     forceSoftwareRenderer};
     };
 #endif
 
@@ -1608,9 +1615,10 @@ int main(int argc, char** argv) {
     app::SetPlaybackMenuChecked(playbackMenuState()); // reflect resumed Playback state immediately
 #endif
 
-    // Potato: "30 FPS" (frame budget, see the main loop below) and "Cheap
+    // Potato: "30 FPS" (frame budget, see the main loop below), "Cheap
     // Visualizer" (drawFrame's visPanel dispatch + the tray-icon tick
-    // below) - same shared-lambda shape as Effects/Playback above.
+    // below) and "Disable Tray Anim" (tray-icon tick only) - same
+    // shared-lambda shape as Effects/Playback above.
     auto toggleLowFps = [&]() {
         potatoLowFps = !potatoLowFps;
 #ifdef __APPLE__
@@ -1623,7 +1631,19 @@ int main(int argc, char** argv) {
         app::SetPotatoMenuChecked(potatoMenuState());
 #endif
     };
-    // Unlike the two toggles above, this one only affects renderer creation
+    // Independent of Cheap Visualizer above: only skips the tray-icon
+    // tick (see the tray tick's __APPLE__ block in the main loop), leaves
+    // the main window's own analyzer untouched. macOS-only in practice -
+    // there's no Linux menu item for it (no tray icon there) - but the
+    // lambda itself doesn't need an #ifdef since only macOS code paths
+    // ever call it.
+    auto toggleDisableTrayAnim = [&]() {
+        potatoDisableTrayAnim = !potatoDisableTrayAnim;
+#ifdef __APPLE__
+        app::SetPotatoMenuChecked(potatoMenuState());
+#endif
+    };
+    // Unlike the toggles above, this one only affects renderer creation
     // (see CreatePreferredRenderer, called long before this lambda exists),
     // so flipping it here just persists the preference for next launch -
     // the menu label says "(restart)" for exactly this reason.
@@ -4062,6 +4082,7 @@ int main(int argc, char** argv) {
             switch (static_cast<app::PotatoMenuAction>(ev.user.code)) {
                 case app::PotatoMenuAction::ToggleLowFps: toggleLowFps(); break;
                 case app::PotatoMenuAction::ToggleCheapVisualizer: toggleCheapVisualizer(); break;
+                case app::PotatoMenuAction::DisableTrayAnimation: toggleDisableTrayAnim(); break;
                 case app::PotatoMenuAction::ToggleForceSoftware: toggleForceSoftwareRenderer(); break;
             }
         }
@@ -4828,10 +4849,13 @@ int main(int argc, char** argv) {
 #ifdef __APPLE__
         else if (appHiddenToTray) {
             // Potato > "Cheap Visualizer" disables the tray-icon visualizer
-            // entirely (not just letting it degrade further) - skips the
-            // second traySpectrumAnalyzer FFT and every NSImage allocation
-            // below, clearing any icon left over from before it was toggled on.
-            if (potatoCheapVisualizer) {
+            // entirely (not just letting it degrade further) as a side
+            // effect of its main-window behavior - skips the second
+            // traySpectrumAnalyzer FFT and every NSImage allocation below,
+            // clearing any icon left over from before it was toggled on.
+            // Potato > "Disable Tray Anim" does the exact same thing here,
+            // independently, without touching the main window at all.
+            if (potatoCheapVisualizer || potatoDisableTrayAnim) {
                 if (trayWasAnimating) {
                     app::ClearMenuBarVisualizer();
                     trayWasAnimating = false;
@@ -4974,6 +4998,7 @@ int main(int argc, char** argv) {
         toSave.uiScalePercent = uiScalePercent;
         toSave.potatoLowFps = potatoLowFps;
         toSave.potatoCheapVisualizer = potatoCheapVisualizer;
+        toSave.potatoDisableTrayAnim = potatoDisableTrayAnim;
         toSave.forceSoftwareRenderer = forceSoftwareRenderer;
         for (int b = 0; b < audio::Equalizer::kBands; ++b) {
             toSave.eqBands[static_cast<size_t>(b)] = engine.EqBand(b);

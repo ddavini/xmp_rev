@@ -34,7 +34,10 @@
 //
 //   Potato: "30 FPS" and "Cheap Visualizer" - new, not in the original.
 //   Low-resource toggles (see main.cpp's kFrameBudgetMs and drawFrame's
-//   visPanel dispatch) for underpowered/older Macs.
+//   visPanel dispatch) for underpowered/older Macs. Also "Disable Tray
+//   Anim" - independent of Cheap Visualizer, macOS-only (see
+//   menu_bar_icon.h's tray-icon visualizer), so it's the one Potato item
+//   not mirrored in the Linux in-app Options dropdown.
 
 namespace xmad::app {
 
@@ -116,21 +119,23 @@ void SetPlaybackMenuChecked(const PlaybackMenuState& state);
 enum class PotatoMenuAction : int32_t {
     ToggleLowFps = 0,
     ToggleCheapVisualizer = 1,
-    ToggleForceSoftware = 2,
+    DisableTrayAnimation = 2,
+    ToggleForceSoftware = 3,
 };
 
-// Bundles all three Potato toggle states in one call, same reasoning as
+// Bundles all four Potato toggle states in one call, same reasoning as
 // PlaybackMenuState above.
 struct PotatoMenuState {
     bool lowFps = false;
     bool cheapVisualizer = false;
+    bool disableTrayAnim = false;
     bool forceSoftwareRenderer = false;
 };
 
-// Updates the "30 FPS"/"Cheap Visualizer"/"Force Software Rendering" items'
-// checkmarks - call once after InstallOptionsMenu with the resumed/initial
-// state, and again every time one is toggled (from a menu or a resumed
-// session).
+// Updates the "30 FPS"/"Cheap Visualizer"/"Disable Tray Anim"/"Force
+// Software Rendering" items' checkmarks - call once after
+// InstallOptionsMenu with the resumed/initial state, and again every time
+// one is toggled (from a menu or a resumed session).
 void SetPotatoMenuChecked(const PotatoMenuState& state);
 
 // Cocoa's native menu tracking - opening any menu bar item (View/Options/

@@ -75,12 +75,18 @@ struct Settings {
     // conversion, not just drawing - see main.cpp's `scale`.
     int uiScalePercent = 100;
     // TODO: "low resource mode, 30FPS ... Activation in a new menu of
-    // Options called Potato" - two independent flags, loaded unconditionally
+    // Options called Potato" - independent flags, loaded unconditionally
     // at startup (see main.cpp's uiScalePercent early-load block) rather
     // than gated on resumeSession like repeat/random: these are performance
     // prefs, not playback state.
     bool potatoLowFps = false;          // Potato > "30 FPS": halves the render loop's frame cap
     bool potatoCheapVisualizer = false; // Potato > "Cheap Visualizer": forces VU/peak-bar-only rendering
+    // Potato > "Disable Tray Anim": macOS-only (see menu_bar_icon.h) -
+    // stops the tray-icon visualizer independently of Cheap Visualizer
+    // above, which also (as a side effect) forces the cheap static
+    // rendering in the main window. Unused/no-op on Linux, which has no
+    // tray icon at all.
+    bool potatoDisableTrayAnim = false;
     // Potato > "Force Software Rendering": opts back out of the GPU-
     // accelerated SDL renderer (see main.cpp's CreatePreferredRenderer) in
     // favor of the old CPU-side software one - an escape hatch for a

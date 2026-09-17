@@ -203,7 +203,11 @@ NSMenu* BuildPotatoMenu(uint32_t potatoEventType) {
         };
         addToggle(@"30 FPS", PotatoMenuAction::ToggleLowFps);
         addToggle(@"Cheap Visualizer", PotatoMenuAction::ToggleCheapVisualizer);
-        // Unlike the two above, this one is only read at startup (see
+        // Unlike Cheap Visualizer above (which also forces the main
+        // window's analyzer box to the cheap static IdleLogo), this only
+        // affects the tray-icon tick - see main.cpp's tray tick gating.
+        addToggle(@"Disable Tray Anim", PotatoMenuAction::DisableTrayAnimation);
+        // Unlike the toggles above, this one is only read at startup (see
         // CreatePreferredRenderer in main.cpp) - toggling it just persists
         // the preference for next launch, it can't rebuild an already-
         // created SDL_Renderer live.
@@ -302,6 +306,7 @@ void SetPotatoMenuChecked(const PotatoMenuState& state) {
         };
         apply(PotatoMenuAction::ToggleLowFps, state.lowFps);
         apply(PotatoMenuAction::ToggleCheapVisualizer, state.cheapVisualizer);
+        apply(PotatoMenuAction::DisableTrayAnimation, state.disableTrayAnim);
         apply(PotatoMenuAction::ToggleForceSoftware, state.forceSoftwareRenderer);
     }
 }
