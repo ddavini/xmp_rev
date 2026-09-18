@@ -1,4 +1,3 @@
-- Look into smooth song trasition option to put in playback menu
 - Look into porting to iOS for Carplay integration
 - ID3 tag editing (reading title already works, editing does not)
 - CPU: add a Main-window dirty-check (like PL/EQ/Info already have) so it
