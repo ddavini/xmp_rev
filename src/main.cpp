@@ -1182,18 +1182,22 @@ int main(int argc, char** argv) {
         if (aboutMinimized) {
             aboutMinimized = false;
             SDL_ShowWindow(aboutWindow);
+            SDL_RaiseWindow(aboutWindow);
         }
         if (infoMinimized) {
             infoMinimized = false;
             SDL_ShowWindow(infoWindow);
+            SDL_RaiseWindow(infoWindow);
         }
         if (plMinimized) {
             plMinimized = false;
             SDL_ShowWindow(plWindow);
+            SDL_RaiseWindow(plWindow);
         }
         if (eqMinimized) {
             eqMinimized = false;
             SDL_ShowWindow(eqWindow);
+            SDL_RaiseWindow(eqWindow);
         }
         mainMinimized = false;
         SDL_ShowWindow(window);
@@ -4203,6 +4207,7 @@ int main(int argc, char** argv) {
                         if (t == triggered || !t->userVisible || !*t->minimized) continue;
                         *t->minimized = false;
                         SDL_ShowWindow(t->win);
+                        SDL_RaiseWindow(t->win);
                         // Same fix as applyUiScale's rescale case above
                         // (see its comment): these three windows only
                         // redraw+present when their memoized content key
