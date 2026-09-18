@@ -1340,7 +1340,7 @@ int main(int argc, char** argv) {
     // project's own ("BETA GOJIRA", bumped from "ALPHA GOJIRA" alongside
     // the 1.0.0 version bump) - same kaiju theme, own naming.
     SDL_Texture* texStatus = RenderTextTexture(
-        renderer, font, std::string("*** V") + app::kVersion + " BETA GOJIRA ***", app::layout::kDisplayFieldW);
+        renderer, font, std::string("*** V") + app::kVersion + " RC GOJIRA ***", app::layout::kDisplayFieldW);
 
     // LCD readout cluster. "MODE" is a genuinely static caption (Form_Load
     // hardcodes lblMode's text the same way in the original). Duration,
@@ -3515,7 +3515,7 @@ int main(int argc, char** argv) {
             // Same formatted version string as Main's status line
             // (texStatus) - deliberately kept in sync rather than
             // hardcoded twice.
-            const std::string versionLine = std::string("*** V") + app::kVersion + " BETA GOJIRA ***";
+            const std::string versionLine = std::string("*** V") + app::kVersion + " RC GOJIRA ***";
             DrawTextureAt(aboutRenderer,
                           aboutVersionTextCache.Get(aboutRenderer, font, versionLine,
                                                      static_cast<int>(versionLine.size()) * gfx::BitmapFont::kCellW),
