@@ -42,6 +42,7 @@ int main() {
         s.chorus = true;
         s.repeat = true;
         s.random = true;
+        s.smoothTransition = true;
         s.eqPreset = 1;
         s.eqBands = {60, 40, 20, 0, -20, -20, 0, 20, 40, 60};
         s.visPanel = 2;
@@ -68,6 +69,7 @@ int main() {
         Check(parsed.chorus == true, "round-trip: chorus");
         Check(parsed.repeat == true, "round-trip: repeat");
         Check(parsed.random == true, "round-trip: random");
+        Check(parsed.smoothTransition == true, "round-trip: smoothTransition");
         Check(parsed.eqPreset == 1, "round-trip: eqPreset");
         Check(parsed.eqBands == s.eqBands, "round-trip: eqBands");
         Check(parsed.visPanel == 2, "round-trip: visPanel");
@@ -138,6 +140,7 @@ int main() {
         Check(parsed.chorus == false, "missing key keeps default (chorus)");
         Check(parsed.repeat == false, "missing key keeps default (repeat)");
         Check(parsed.random == false, "missing key keeps default (random)");
+        Check(parsed.smoothTransition == false, "missing key keeps default (smoothTransition)");
         Check(parsed.eqPreset == -1, "missing key keeps default (eqPreset)");
         Check(parsed.eqBands == Settings{}.eqBands, "missing key keeps default (eqBands)");
         Check(parsed.visPanel == 0, "missing key keeps default (visPanel)");

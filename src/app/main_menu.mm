@@ -181,6 +181,7 @@ NSMenu* BuildPlaybackMenu(uint32_t playbackEventType) {
         };
         addToggle(@"Repeat", PlaybackMenuAction::ToggleRepeat);
         addToggle(@"Random", PlaybackMenuAction::ToggleRandom);
+        addToggle(@"Smooth Transition", PlaybackMenuAction::ToggleSmoothTransition);
         return playbackMenu;
     }
 }
@@ -294,6 +295,7 @@ void SetPlaybackMenuChecked(const PlaybackMenuState& state) {
         };
         apply(PlaybackMenuAction::ToggleRepeat, state.repeat);
         apply(PlaybackMenuAction::ToggleRandom, state.random);
+        apply(PlaybackMenuAction::ToggleSmoothTransition, state.smoothTransition);
     }
 }
 

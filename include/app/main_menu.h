@@ -101,13 +101,15 @@ void SetEffectsMenuChecked(const EffectsMenuState& state);
 enum class PlaybackMenuAction : int32_t {
     ToggleRepeat = 0,
     ToggleRandom = 1,
+    ToggleSmoothTransition = 2,
 };
 
-// Bundles both Playback toggle states in one call, same reasoning as
+// Bundles all Playback toggle states in one call, same reasoning as
 // EffectsMenuState above.
 struct PlaybackMenuState {
     bool repeat = false;
     bool random = false;
+    bool smoothTransition = false;
 };
 
 // Updates the Repeat/Random items' checkmarks - call once after

@@ -1098,10 +1098,17 @@ int main(int argc, char** argv) {
     // this cycle" bag - see app::NextAutoAdvanceIndex.
     bool repeatEnabled = false;
     bool randomEnabled = false;
+    // "Smooth Transition": fade the outgoing track out and the incoming one
+    // in around a track change instead of the engine's default instant cut -
+    // see Engine::BeginFadeOut/BeginFadeIn and the pendingTransition* state
+    // near openPlaylistIndex below.
+    bool smoothTransitionEnabled = false;
     app::ShuffleState shuffleBagState;
 #ifdef __APPLE__
     // Same reasoning as effectsMenuState above, for the Playback submenu.
-    auto playbackMenuState = [&]() { return app::PlaybackMenuState{repeatEnabled, randomEnabled}; };
+    auto playbackMenuState = [&]() {
+        return app::PlaybackMenuState{repeatEnabled, randomEnabled, smoothTransitionEnabled};
+    };
     // Same reasoning again, for the Potato submenu. potatoLowFps/
     // potatoCheapVisualizer/potatoDisableTrayAnim/forceSoftwareRenderer are
     // declared earlier (the uiScalePercent-style early load block), so
@@ -1284,6 +1291,7 @@ int main(int argc, char** argv) {
         engine.SetChorusOn(sessionSettings.chorus);
         repeatEnabled = sessionSettings.repeat;
         randomEnabled = sessionSettings.random;
+        smoothTransitionEnabled = sessionSettings.smoothTransition;
         if (randomEnabled) app::ResetShuffleBag(shuffleBagState, playlist.size(), playlist.Generation());
         // TODO: "EQ mode not saved". Restoring the actual band gains here
         // (not just the preset index, see eqCurrentPreset's init below) is
@@ -1615,6 +1623,12 @@ int main(int argc, char** argv) {
         app::SetPlaybackMenuChecked(playbackMenuState());
 #endif
     };
+    auto toggleSmoothTransition = [&]() {
+        smoothTransitionEnabled = !smoothTransitionEnabled;
+#ifdef __APPLE__
+        app::SetPlaybackMenuChecked(playbackMenuState());
+#endif
+    };
 #ifdef __APPLE__
     app::SetPlaybackMenuChecked(playbackMenuState()); // reflect resumed Playback state immediately
 #endif
@@ -1758,6 +1772,27 @@ int main(int argc, char** argv) {
         applyPerSongEqForCurrentTrack();
     };
 
+    // "Smooth Transition" support: Engine::Open() tears down and reopens the
+    // audio device immediately, so the outgoing track's fade-out has to
+    // finish *before* openPlaylistIndex runs - there's no way to overlap the
+    // two with a single-stream engine. requestTrackChange defers the actual
+    // switch until pendingTransitionDeadline, polled once per main-loop
+    // iteration below; a second request before that fires just overwrites
+    // the pending index/deadline; the fade ramp itself (Engine::fadeGain_)
+    // naturally continues from wherever it currently is.
+    int pendingTransitionIndex = -1;
+    Uint32 pendingTransitionDeadline = 0;
+    constexpr Uint32 kSmoothTransitionFadeMs = 400;
+    auto requestTrackChange = [&](int idx) {
+        if (smoothTransitionEnabled && engine.state() == audio::PlayState::Playing) {
+            engine.BeginFadeOut(kSmoothTransitionFadeMs / 1000.0);
+            pendingTransitionIndex = idx;
+            pendingTransitionDeadline = SDL_GetTicks() + kSmoothTransitionFadeMs;
+        } else {
+            openPlaylistIndex(idx);
+        }
+    };
+
     // The Eject menu's two items (below) need to add files/a folder to
     // the playlist the same way a drag-and-drop does, but that logic
     // (handleDroppedFile) isn't declared until after the playlist window's
@@ -1816,6 +1851,7 @@ int main(int argc, char** argv) {
                 break;
             case TransportAction::Stop:
                 userStoppedTrack = true;
+                pendingTransitionIndex = -1; // don't jump to another track after a user Stop
                 engine.Stop();
                 notifyNowPlayingChanged(false);
                 break;
@@ -1840,7 +1876,7 @@ int main(int argc, char** argv) {
                 if (playlist.empty()) break;
                 const int newIdx = playlist.WrappedIndex(action == TransportAction::Back ? -1 : 1);
                 if (engine.state() == audio::PlayState::Playing) {
-                    openPlaylistIndex(newIdx);
+                    requestTrackChange(newIdx);
                 } else {
                     playlist.SetCurrentIndex(newIdx);
                 }
@@ -2634,8 +2670,8 @@ int main(int argc, char** argv) {
             }
         } else if (optionsMenuLevel == OptionsMenuLevel::Playback) {
             Bevel::Draw(renderer, kPlaybackMenuX, kPlaybackMenuY, kPlaybackMenuW, kPlaybackMenuH);
-            static const char* kPlaybackMenuLabels[kPlaybackMenuItems] = {"REPEAT", "RANDOM"};
-            const bool playbackOn[kPlaybackMenuItems] = {repeatEnabled, randomEnabled};
+            static const char* kPlaybackMenuLabels[kPlaybackMenuItems] = {"REPEAT", "RANDOM", "SMOOTH FADE"};
+            const bool playbackOn[kPlaybackMenuItems] = {repeatEnabled, randomEnabled, smoothTransitionEnabled};
             for (int i = 0; i < kPlaybackMenuItems; ++i) {
                 const int iy = kPlaybackMenuY + i * kOptionsMenuItemH;
                 if (playbackOn[i]) {
@@ -3562,6 +3598,10 @@ int main(int argc, char** argv) {
         // Debug hook: see "repeat" above.
         toggleRandom();
         std::cout << "random=" << randomEnabled << "\n";
+    } else if (clickName == "smoothtransition") {
+        // Debug hook: see "repeat" above.
+        toggleSmoothTransition();
+        std::cout << "smoothtransition=" << smoothTransitionEnabled << "\n";
     } else if (clickName == "mute") {
         // Debug hook: drives handleUtilityPress through the exact same
         // lambda the real mouse handler calls.
@@ -4079,6 +4119,7 @@ int main(int argc, char** argv) {
             switch (static_cast<app::PlaybackMenuAction>(ev.user.code)) {
                 case app::PlaybackMenuAction::ToggleRepeat: toggleRepeat(); break;
                 case app::PlaybackMenuAction::ToggleRandom: toggleRandom(); break;
+                case app::PlaybackMenuAction::ToggleSmoothTransition: toggleSmoothTransition(); break;
             }
         }
         // Posted by main_menu.mm's Potato-menu items.
@@ -4329,6 +4370,7 @@ int main(int argc, char** argv) {
                         switch (item) {
                             case 0: toggleRepeat(); break;
                             case 1: toggleRandom(); break;
+                            case 2: toggleSmoothTransition(); break;
                         }
                     }
                 } else if (optionsMenuLevel == OptionsMenuLevel::Potato) {
@@ -4830,11 +4872,32 @@ int main(int argc, char** argv) {
                 const int next = app::NextAutoAdvanceIndex(
                     playlist.currentIndex(), playlist.size(), repeatEnabled, randomEnabled, shuffleBagState,
                     playlist.Generation(), [](size_t n) { return static_cast<size_t>(std::rand()) % n; });
-                if (next != app::kStopPlayback) openPlaylistIndex(next);
+                if (next != app::kStopPlayback) {
+                    // Unlike requestTrackChange (manual Next/Back, where the
+                    // outgoing track is still audibly playing when the user
+                    // acts), by the time a natural end-of-track is detected
+                    // here the engine has already gone silent on its own -
+                    // there's nothing left to fade out, so Smooth Transition
+                    // only fades the new track in.
+                    openPlaylistIndex(next);
+                    if (smoothTransitionEnabled) engine.BeginFadeIn(kSmoothTransitionFadeMs / 1000.0);
+                }
             }
             userStoppedTrack = false;
         }
         lastEngineState = engine.state();
+
+        // Smooth Transition's deferred half: requestTrackChange (manual
+        // Next/Back) started a fade-out and parked the actual track switch
+        // here rather than doing it immediately, since Engine::Open() would
+        // otherwise cut the fade-out short. Once the fade-out has had time
+        // to finish, open the new track and fade it in.
+        if (pendingTransitionIndex >= 0 && SDL_GetTicks() >= pendingTransitionDeadline) {
+            const int idx = pendingTransitionIndex;
+            pendingTransitionIndex = -1;
+            openPlaylistIndex(idx);
+            engine.BeginFadeIn(kSmoothTransitionFadeMs / 1000.0);
+        }
 
         if (!playlist.empty() && frameStart - lastNowPlayingRefresh >= 5000) {
             lastNowPlayingRefresh = frameStart;
@@ -4997,6 +5060,7 @@ int main(int argc, char** argv) {
         toSave.chorus = engine.ChorusOn();
         toSave.repeat = repeatEnabled;
         toSave.random = randomEnabled;
+        toSave.smoothTransition = smoothTransitionEnabled;
         toSave.eqPreset = eqCurrentPreset;
         toSave.visPanel = static_cast<int>(visPanel);
         toSave.perSongEq = perSongEqEnabled;

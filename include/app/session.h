@@ -45,6 +45,10 @@ struct Settings {
     // effect involved), just plain UI-level playback flags.
     bool repeat = false;
     bool random = false;
+    // "Smooth Transition": fade the outgoing track out and the incoming one
+    // in around a track change, instead of the engine's default instant cut
+    // - see Engine::BeginFadeOut/BeginFadeIn.
+    bool smoothTransition = false;
     // TODO: "EQ mode not saved". eqPreset mirrors main.cpp's
     // eqCurrentPreset (-1 = none/manual, matching Form_Load never
     // checking a radio button in the original); eqBands are the actual

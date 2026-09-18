@@ -84,6 +84,15 @@ public:
     void SetMuted(bool m) { muted_.store(m); }
     bool IsMuted() const { return muted_.load(); }
 
+    // Independent multiplicative gain, layered under volume_/muted_ in the
+    // audio callback and ramped smoothly to 0.0/1.0 over `seconds` rather
+    // than jumping - used by the "Smooth Transition" playback option to fade
+    // the current track out before a track change and fade the next one in.
+    // Doesn't touch volume_, so the user's volume slider position survives a
+    // transition untouched.
+    void BeginFadeOut(double seconds) { RequestFade(0.0f, seconds); }
+    void BeginFadeIn(double seconds) { RequestFade(1.0f, seconds); }
+
     // Mirrors the original's XSound "Surround" toggle (see
     // audio/stereo_widen.h for what this substitutes and why). Applied in
     // the decode thread, after the EQ and before the ring buffer, same as
@@ -122,6 +131,7 @@ private:
     void DecodeThreadMain();
     void CloseDevice();
     void CaptureVisSnapshot(const float* interleaved, int frames, int channels);
+    void RequestFade(float target, double seconds);
 
     std::unique_ptr<Decoder> decoder_;
     std::unique_ptr<RingBuffer> ring_;
@@ -135,6 +145,18 @@ private:
     // (GetINI(..., "VOLUME", "25")) - see volume.bas/FunzioniGlobali.bas.
     std::atomic<float> volume_{0.25f};
     std::atomic<bool> muted_{false};
+
+    // Hand-off from RequestFade (called from the main thread) to
+    // AudioCallback (the audio thread) - same shape as seekTargetFrame_'s
+    // request/consume pattern. fadeGain_/fadeStep_/fadeFramesRemaining_
+    // below are consumed exclusively inside AudioCallback, so they're plain
+    // members rather than atomics.
+    std::atomic<bool> fadePending_{false};
+    std::atomic<float> fadeRequestTarget_{1.0f};
+    std::atomic<double> fadeRequestSeconds_{0.0};
+    float fadeGain_ = 1.0f;
+    float fadeStep_ = 0.0f;
+    uint64_t fadeFramesRemaining_ = 0;
     std::atomic<bool> xSound_{false};
     std::atomic<bool> compressionOn_{false};
     std::atomic<bool> saturationOn_{false};

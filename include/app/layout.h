@@ -136,7 +136,7 @@ constexpr int kOptionsMenuTopH = kOptionsMenuItemH * kOptionsMenuTopItems;
 constexpr int kOptionsMenuTopX = kEffectsToggleX;
 constexpr int kOptionsMenuTopY = kEffectsToggleY - kOptionsMenuTopH;
 
-constexpr int kPlaybackMenuItems = 2; // Repeat, Random
+constexpr int kPlaybackMenuItems = 3; // Repeat, Random, Smooth Transition
 constexpr int kPlaybackMenuW = kEffectsMenuW;
 constexpr int kPlaybackMenuH = kOptionsMenuItemH * kPlaybackMenuItems;
 constexpr int kPlaybackMenuX = kEffectsToggleX;

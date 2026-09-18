@@ -137,6 +137,12 @@ void Engine::Close() {
     ring_.reset();
 }
 
+void Engine::RequestFade(float target, double seconds) {
+    fadeRequestTarget_.store(target);
+    fadeRequestSeconds_.store(seconds);
+    fadePending_.store(true);
+}
+
 void Engine::SeekSeconds(double seconds) {
     if (!decoder_) return;
     const uint64_t frame = static_cast<uint64_t>(std::max(0.0, seconds) * decoder_->sampleRate());
@@ -208,10 +214,28 @@ void SDLCALL Engine::AudioCallback(void* userdata, uint8_t* stream, int len) {
     self->framesConsumed_ += framesGot;
 
     if (framesGot > 0) {
+        if (self->fadePending_.exchange(false)) {
+            const float target = self->fadeRequestTarget_.load();
+            const double seconds = self->fadeRequestSeconds_.load();
+            const uint64_t frames =
+                std::max<uint64_t>(1, static_cast<uint64_t>(seconds * self->sampleRate()));
+            self->fadeStep_ = (target - self->fadeGain_) / static_cast<float>(frames);
+            self->fadeFramesRemaining_ = frames;
+        }
+
         const float vol = self->muted_.load() ? 0.0f : self->volume_.load();
-        if (vol != 1.0f) {
-            const size_t sampleCount = framesGot * static_cast<size_t>(channels);
-            for (size_t i = 0; i < sampleCount; ++i) out[i] *= vol;
+        if (vol != 1.0f || self->fadeGain_ != 1.0f || self->fadeFramesRemaining_ > 0) {
+            for (size_t f = 0; f < framesGot; ++f) {
+                if (self->fadeFramesRemaining_ > 0) {
+                    self->fadeGain_ += self->fadeStep_;
+                    if (--self->fadeFramesRemaining_ == 0) {
+                        self->fadeGain_ = self->fadeRequestTarget_.load();
+                    }
+                }
+                const float gain = vol * self->fadeGain_;
+                float* frame = out + f * static_cast<size_t>(channels);
+                for (int c = 0; c < channels; ++c) frame[c] *= gain;
+            }
         }
         self->CaptureVisSnapshot(out, static_cast<int>(framesGot), channels);
     }
