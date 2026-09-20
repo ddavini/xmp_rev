@@ -1,4 +1,6 @@
 - Look into porting to iOS for Carplay integration
 - CPU: add a Main-window dirty-check (like PL/EQ/Info already have) so it
   skips redraw+present when fully idle, instead of always drawing at the
-  frame-cap rate. 
+  frame-cap rate.
+- FLAC tag editing (ID3 editing only covers MP3 so far - FLAC's tags are
+  Vorbis comments, a different format/write path, still read-only)
