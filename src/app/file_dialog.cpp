@@ -20,6 +20,39 @@ std::vector<std::string> ParseDialogOutput(const std::string& raw) {
     return paths;
 }
 
+// Security-review hardening: SaveNativeFileDialog's `defaultName` used to
+// be interpolated straight into its command strings with no escaping -
+// not exploitable via any audio/playlist file today (every current
+// caller only ever passes a path the user already picked, or a hardcoded
+// literal; see SaveNativeFileDialog's caller in main.cpp), but a bare
+// `"`/`'`/`` ` ``/`$()` in a future caller (e.g. a filename suggested
+// from a track's own title) would otherwise break out of the quoting.
+// These two helpers are why they're pure/exposed (like ParseDialogOutput)
+// rather than folded inline - so file_dialog_test.cpp can cover the
+// escaping logic itself without popping a real dialog.
+std::string EscapeForAppleScriptString(const std::string& s) {
+    std::string out;
+    out.reserve(s.size());
+    for (char c : s) {
+        if (c == '"' || c == '\\') out += '\\';
+        out += c;
+    }
+    return out;
+}
+
+std::string EscapeForShellSingleQuoted(const std::string& s) {
+    std::string out;
+    out.reserve(s.size());
+    for (char c : s) {
+        if (c == '\'') {
+            out += "'\\''";
+        } else {
+            out += c;
+        }
+    }
+    return out;
+}
+
 namespace {
 
 // Shared by every OS-shelling function below - runs `cmd`, reads all of
@@ -114,7 +147,7 @@ std::optional<std::string> SaveNativeFileDialog(const std::string& defaultName) 
         "-e 'activate' "
         "-e 'delay 0.15' "
         "-e 'set theFile to choose file name with prompt \"Save Playlist\" default name \"" +
-        defaultName +
+        EscapeForAppleScriptString(defaultName) +
         "\"' "
         "-e 'end tell' "
         "-e 'return POSIX path of theFile' "
@@ -124,10 +157,10 @@ std::optional<std::string> SaveNativeFileDialog(const std::string& defaultName) 
 #else
     const std::string cmd = "zenity --file-selection --save --confirm-overwrite --title='Save Playlist' "
                              "--filename='" +
-                             defaultName +
+                             EscapeForShellSingleQuoted(defaultName) +
                              "' 2>/dev/null "
-                             "|| kdialog --getsavefilename ./" +
-                             defaultName + " 'Playlist (*.m3u)' 2>/dev/null";
+                             "|| kdialog --getsavefilename './" +
+                             EscapeForShellSingleQuoted(defaultName) + "' 'Playlist (*.m3u)' 2>/dev/null";
 #endif
     const std::string path = TrimTrailingNewline(RunPipedCommand(cmd.c_str()));
     return path.empty() ? std::nullopt : std::optional<std::string>(path);

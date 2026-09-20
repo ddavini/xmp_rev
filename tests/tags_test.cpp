@@ -381,6 +381,61 @@ int main() {
         std::remove(path.c_str());
     }
 
+    // Security review: ReadMp3Tags must not trust a forged/oversized ID3v2
+    // declared tag size and allocate for it before checking the file is
+    // actually that large - a ~30-byte file claiming the syncsafe-max
+    // (~256 MiB) tag size used to force a transient ~256 MiB allocation
+    // here. The forged tag must simply be skipped (same as "no tag").
+    {
+        const std::string path = "tags_test_forged_size.mp3";
+        std::string header = "ID3";
+        header += static_cast<char>(3); // version major
+        header += static_cast<char>(0); // revision
+        header += static_cast<char>(0); // flags
+        AppendSyncSafe32(header, 0x0FFFFFFFu); // max syncsafe value (~256 MiB)
+        WriteFile(path, header + "TRAILING-BYTES-DONT-MATTER");
+
+        const TagInfo t = ReadTrackTags(path);
+        Check(t.title.empty(), "read: forged oversized ID3v2 size yields empty tags, not a huge allocation");
+
+        std::remove(path.c_str());
+    }
+
+    // Security review: ScanExistingId3v2's frame-size arithmetic must not
+    // wrap in 32 bits. A v2.3 (Plain32) frame whose declared size is
+    // within 9 of UINT32_MAX used to make `10 + frameSize` wrap to a tiny
+    // value, letting the bounds check that's supposed to reject an
+    // oversized/malformed frame silently pass instead - corrupting bytes
+    // from that frame (and whatever followed it) into the rewritten tag.
+    // It must instead be recognized as malformed and dropped outright.
+    {
+        const std::string path = "tags_test_frame_overflow.mp3";
+        const std::string poisonPayload = "payload that must never end up copied into the new tag";
+        std::string frame = "TXXX"; // unmanaged id, so survival is directly observable in the output bytes
+        AppendPlain32(frame, 0xFFFFFFFAu); // 10 + this wraps to 0 in 32-bit arithmetic
+        frame += std::string(2, '\0');     // flags
+        frame += poisonPayload;
+        WriteFile(path, BuildId3v23Tag(frame) + "AUDIO");
+
+        TagInfo t;
+        t.title = "New Title";
+        Check(WriteMp3Id3v2Tags(path, t), "write: succeeds even when the existing tag has an overflow-crafted frame");
+
+        const std::string full = ReadFile(path);
+        Check(full.size() >= 10, "write: rewritten file has at least a tag header");
+        const auto tagSizeByte = [&](int i) { return static_cast<uint8_t>(full[static_cast<size_t>(6 + i)]); };
+        const uint32_t writtenTagSize = (static_cast<uint32_t>(tagSizeByte(0)) << 21) |
+                                         (static_cast<uint32_t>(tagSizeByte(1)) << 14) |
+                                         (static_cast<uint32_t>(tagSizeByte(2)) << 7) | tagSizeByte(3);
+        const uint32_t expectedTit2FrameSize = 10 + 1 + static_cast<uint32_t>(std::string("New Title").size());
+        Check(writtenTagSize == expectedTit2FrameSize,
+              "write: rewritten tag holds only the fresh TIT2 frame - the overflow-crafted frame was rejected");
+        Check(full.find(poisonPayload) == std::string::npos,
+              "write: the overflow-crafted frame's payload bytes are not present anywhere in the rewritten file");
+
+        std::remove(path.c_str());
+    }
+
     if (g_failures == 0) {
         std::printf("PASS\n");
         return 0;

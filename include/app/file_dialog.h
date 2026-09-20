@@ -23,6 +23,19 @@ namespace xmad::app {
 // dropped; \r is stripped so it tolerates either line-ending convention.
 std::vector<std::string> ParseDialogOutput(const std::string& raw);
 
+// Escapes `s` for embedding inside a double-quoted AppleScript string
+// literal (`"` and `\` are AppleScript's own escape characters, same
+// convention as C) - used by SaveNativeFileDialog's macOS branch so a
+// defaultName containing a quote/backslash can't break out of the
+// surrounding osascript command string.
+std::string EscapeForAppleScriptString(const std::string& s);
+
+// Escapes `s` for embedding inside a single-quoted POSIX shell argument -
+// the standard "close the quote, escaped literal quote, reopen the
+// quote" idiom (a bare `'` can't be escaped from inside single quotes).
+// Used by SaveNativeFileDialog's Linux branch for the same reason.
+std::string EscapeForShellSingleQuoted(const std::string& s);
+
 // Opens a native file-selection dialog, restricted to mp3/flac/m3u
 // (Cocoa panel via osascript on macOS; zenity, falling back to kdialog,
 // on Linux), and returns the chosen paths, or an empty vector if the

@@ -176,7 +176,17 @@ bool ScanExistingId3v2(const std::string& fileStart, int& majorVersion, std::vec
         const std::string frameId = fileStart.substr(off, 4);
         if (frameId == std::string(4, '\0')) break; // padding reached
         const uint32_t frameSize = majorVersion >= 4 ? SyncSafe32(fileStart, off + 4) : Plain32(fileStart, off + 4);
-        const size_t frameTotal = 10 + frameSize;
+        // frameSize cast to size_t BEFORE adding 10 - security-review
+        // finding: `10 + frameSize` (both uint32_t/int) computes in
+        // 32-bit arithmetic and only widens to size_t afterward, so a
+        // v2.3 (Plain32, not syncsafe-bounded) frameSize within 9 of
+        // UINT32_MAX wrapped to a tiny frameTotal, letting the bounds
+        // check below silently pass a bogus "small" frame instead of
+        // rejecting it - mis-parsing the tag into spurious frames rather
+        // than any actual out-of-bounds access (substr stays safe either
+        // way). ParseId3v2Tags avoids this by computing dataStart as
+        // size_t first; same fix here.
+        const size_t frameTotal = static_cast<size_t>(frameSize) + 10;
         if (frameSize == 0 || off + frameTotal > tagTotalSize) break; // malformed - stop, same as ParseId3v2Tags
         frames.push_back({frameId, fileStart.substr(off, frameTotal)});
         off += frameTotal;
@@ -309,20 +319,35 @@ TagInfo ReadMp3Tags(const std::string& path) {
     std::ifstream f(path, std::ios::binary);
     if (!f) return out;
 
+    // Read once, up front, so the ID3v2 branch below can check a
+    // forged/oversized declared tag size against the file's real length
+    // before allocating for it - a security-review finding: a ~10-byte
+    // file with a header claiming the syncsafe-max ~256 MiB tag size used
+    // to force a transient ~256 MiB allocation here on nothing more than
+    // being shown in the playlist/Info window. Mirrors the same guard
+    // WriteMp3Id3v2Tags already has (`if (need > fileSize) return false`).
+    f.seekg(0, std::ios::end);
+    const std::streamoff fileSize = f.tellg();
+    f.seekg(0, std::ios::beg);
+
     std::string header(10, '\0');
     f.read(header.data(), 10);
     if (f.gcount() == 10 && header[0] == 'I' && header[1] == 'D' && header[2] == '3') {
         const uint32_t tagSize = SyncSafe32(header, 6);
-        std::string full = header;
-        full.resize(10 + tagSize);
-        f.read(full.data() + 10, static_cast<std::streamsize>(tagSize));
-        full.resize(10 + static_cast<size_t>(std::max<std::streamsize>(0, f.gcount())));
-        ParseId3v2Tags(full, out);
+        const std::streamoff need = 10 + static_cast<std::streamoff>(tagSize);
+        if (need <= fileSize) {
+            std::string full = header;
+            full.resize(static_cast<size_t>(need));
+            f.read(full.data() + 10, static_cast<std::streamsize>(tagSize));
+            full.resize(10 + static_cast<size_t>(std::max<std::streamsize>(0, f.gcount())));
+            ParseId3v2Tags(full, out);
+        }
+        // else: declared tag runs past EOF - malformed/forged, skip it
+        // entirely rather than allocating for it; falls through to the
+        // ID3v1/filename fallback below, same as "no ID3v2 tag at all".
     }
 
     f.clear();
-    f.seekg(0, std::ios::end);
-    const std::streamoff fileSize = f.tellg();
     if (fileSize >= 128) {
         f.seekg(fileSize - 128);
         std::string tail(128, '\0');

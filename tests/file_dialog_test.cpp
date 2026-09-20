@@ -1,12 +1,20 @@
 // Covers ParseDialogOutput, the pure part of the Eject-button file picker
 // - the live OpenNativeFileDialog() actually pops a native OS dialog and
 // blocks on it, which a headless test can't safely drive (see
-// app/file_dialog.h).
+// app/file_dialog.h). Also covers EscapeForAppleScriptString/
+// EscapeForShellSingleQuoted (security review: SaveNativeFileDialog's
+// command-string escaping) - unlike the live dialogs, a non-interactive
+// shell invocation (printf via popen) is safe and fast to actually run,
+// so that one gets a real end-to-end round-trip check, not just a
+// string-equality check against the escaping logic in isolation.
 
 #include "app/file_dialog.h"
 
+#include <array>
 #include <cstdio>
 
+using xmad::app::EscapeForAppleScriptString;
+using xmad::app::EscapeForShellSingleQuoted;
 using xmad::app::ParseDialogOutput;
 using xmad::app::TrimTrailingNewline;
 
@@ -64,6 +72,39 @@ int main() {
         Check(TrimTrailingNewline("/music/out.m3u\r\n") == "/music/out.m3u", "trim: trailing CRLF");
         Check(TrimTrailingNewline("/music/out.m3u") == "/music/out.m3u", "trim: no trailing newline, unchanged");
         Check(TrimTrailingNewline("") == "", "trim: empty input stays empty");
+    }
+
+    // Security review: EscapeForAppleScriptString defends
+    // SaveNativeFileDialog's macOS branch against a defaultName that
+    // breaks out of the surrounding double-quoted AppleScript string.
+    {
+        Check(EscapeForAppleScriptString("plain") == "plain", "applescript escape: no special chars, unchanged");
+        Check(EscapeForAppleScriptString("a\"b") == "a\\\"b", "applescript escape: embedded quote escaped");
+        Check(EscapeForAppleScriptString("a\\b") == "a\\\\b", "applescript escape: embedded backslash escaped");
+        Check(EscapeForAppleScriptString("\"; do shell script \"rm -rf ~") == "\\\"; do shell script \\\"rm -rf ~",
+              "applescript escape: a quote-breakout attempt is neutralized");
+    }
+
+    // Security review: EscapeForShellSingleQuoted defends the Linux
+    // branch (zenity/kdialog, invoked via popen -> /bin/sh -c) the same
+    // way. The last case actually round-trips the escaped result through
+    // a real non-interactive shell (printf via popen) to confirm nothing
+    // in a crafted string is ever interpreted as a separate command.
+    {
+        Check(EscapeForShellSingleQuoted("plain") == "plain", "shell escape: no special chars, unchanged");
+        Check(EscapeForShellSingleQuoted("a'b") == "a'\\''b", "shell escape: embedded single quote escaped");
+        Check(EscapeForShellSingleQuoted("'; rm -rf ~; '") == "'\\''; rm -rf ~; '\\''",
+              "shell escape: a quote-breakout attempt is neutralized");
+
+        const std::string malicious = "'; touch /tmp/xmad_test_should_never_run; echo 'x";
+        const std::string cmd = "printf '%s' '" + EscapeForShellSingleQuoted(malicious) + "'";
+        std::string out;
+        if (FILE* pipe = popen(cmd.c_str(), "r")) {
+            std::array<char, 256> buf{};
+            while (fgets(buf.data(), buf.size(), pipe) != nullptr) out += buf.data();
+            pclose(pipe);
+        }
+        Check(out == malicious, "shell escape: round-trips through a real shell unchanged, nothing executed");
     }
 
     if (g_failures == 0) {
