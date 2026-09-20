@@ -8,13 +8,17 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <fstream>
+#include <iterator>
 #include <string>
 
 using xmad::audio::ParseId3v1Tags;
 using xmad::audio::ParseId3v1Title;
 using xmad::audio::ParseId3v2Tags;
 using xmad::audio::ParseId3v2Title;
+using xmad::audio::ReadTrackTags;
 using xmad::audio::TagInfo;
+using xmad::audio::WriteMp3Id3v2Tags;
 
 namespace {
 int g_failures = 0;
@@ -91,6 +95,16 @@ std::string Utf16LE(const std::string& ascii) {
     }
     out += std::string(2, '\0'); // null terminator
     return out;
+}
+
+std::string ReadFile(const std::string& path) {
+    std::ifstream f(path, std::ios::binary);
+    return std::string((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+}
+
+void WriteFile(const std::string& path, const std::string& data) {
+    std::ofstream f(path, std::ios::binary | std::ios::trunc);
+    f.write(data.data(), static_cast<std::streamsize>(data.size()));
 }
 
 } // namespace
@@ -245,6 +259,126 @@ int main() {
         TagInfo t;
         ParseId3v1Tags(tail, t);
         Check(t.track == "7", "id3v1.1: track number extracted");
+    }
+
+    // WriteMp3Id3v2Tags: untagged file gets a fresh ID3v2.3 tag, and the
+    // original bytes end up preserved exactly after it.
+    {
+        const std::string path = "tags_test_new_tag.mp3";
+        const std::string audioBytes = "FAKE-MP3-AUDIO-DATA-1234567890";
+        WriteFile(path, audioBytes);
+
+        TagInfo t;
+        t.title = "New Title";
+        Check(WriteMp3Id3v2Tags(path, t), "write: create fresh tag on untagged file succeeds");
+
+        const std::string full = ReadFile(path);
+        Check(full.size() > audioBytes.size(), "write: file grew (a tag got prefixed)");
+        Check(full.substr(full.size() - audioBytes.size()) == audioBytes,
+              "write: original audio bytes preserved exactly after the new tag");
+        Check(ReadTrackTags(path).title == "New Title", "write: title round-trips after creating a fresh tag");
+
+        std::remove(path.c_str());
+    }
+
+    // WriteMp3Id3v2Tags: editing one field on an existing tag leaves an
+    // unrelated (binary-looking, APIC-like) frame byte-for-byte untouched.
+    {
+        const std::string path = "tags_test_preserve.mp3";
+        std::string frames = BuildFrame("TIT2", Latin1Body("Old Title"));
+        std::string binaryPayload;
+        for (int i = 0; i < 40; ++i) binaryPayload += static_cast<char>(i);
+        frames += BuildFrame("APIC", binaryPayload);
+        const std::string tag = BuildId3v23Tag(frames);
+        const std::string audioBytes = "REST-OF-FILE-AUDIO-BYTES";
+        WriteFile(path, tag + audioBytes);
+
+        TagInfo t = ReadTrackTags(path);
+        Check(t.title == "Old Title", "write/preserve fixture: title reads back before editing");
+        t.title = "Edited Title";
+        Check(WriteMp3Id3v2Tags(path, t), "write: edit succeeds on existing v2.3 tag");
+
+        const std::string full = ReadFile(path);
+        Check(full.find(binaryPayload) != std::string::npos,
+              "write: unrelated (APIC-like) frame bytes preserved untouched");
+        Check(full.substr(full.size() - audioBytes.size()) == audioBytes,
+              "write: audio data after the tag preserved exactly");
+        Check(ReadTrackTags(path).title == "Edited Title", "write: edited title round-trips");
+
+        std::remove(path.c_str());
+    }
+
+    // WriteMp3Id3v2Tags: clearing a field to "" removes its frame entirely
+    // without disturbing a sibling field.
+    {
+        const std::string path = "tags_test_clear.mp3";
+        std::string frames = BuildFrame("TIT2", Latin1Body("Has A Title"));
+        frames += BuildFrame("TPE1", Latin1Body("Has An Artist"));
+        WriteFile(path, BuildId3v23Tag(frames) + "AUDIO");
+
+        TagInfo t = ReadTrackTags(path);
+        t.title.clear();
+        Check(WriteMp3Id3v2Tags(path, t), "write: clearing a field succeeds");
+
+        const TagInfo readBack = ReadTrackTags(path);
+        Check(readBack.title.empty(), "write: cleared field's frame is gone after rewrite");
+        Check(readBack.artist == "Has An Artist", "write: untouched field survives a sibling's clear");
+
+        std::remove(path.c_str());
+    }
+
+    // WriteMp3Id3v2Tags: an ID3v2.2 tag (3-char frame IDs, a shape this
+    // writer doesn't parse) is refused rather than guessed at, and the
+    // file is left completely untouched.
+    {
+        const std::string path = "tags_test_v22.mp3";
+        std::string tag = "ID3";
+        tag += static_cast<char>(2); // version major 2 - unsupported
+        tag += static_cast<char>(0);
+        tag += static_cast<char>(0);
+        AppendSyncSafe32(tag, 4);
+        tag += "TT2X"; // stand-in for a v2.2-shaped frame; refused before frames are ever walked
+        const std::string original = tag + "AUDIO-UNCHANGED";
+        WriteFile(path, original);
+
+        TagInfo t;
+        t.title = "Should Not Apply";
+        Check(!WriteMp3Id3v2Tags(path, t), "write: v2.2 tag is refused, not guessed at");
+        Check(ReadFile(path) == original, "write: file left byte-for-byte unchanged after a refused write");
+
+        std::remove(path.c_str());
+    }
+
+    // WriteMp3Id3v2Tags: the unsynchronisation flag is refused the same way.
+    {
+        const std::string path = "tags_test_unsync.mp3";
+        std::string tag = "ID3";
+        tag += static_cast<char>(3);
+        tag += static_cast<char>(0);
+        tag += static_cast<char>(0x80); // unsynchronisation flag set - unsupported
+        AppendSyncSafe32(tag, 0);
+        const std::string original = tag + "AUDIO-UNCHANGED-2";
+        WriteFile(path, original);
+
+        TagInfo t;
+        t.title = "Should Not Apply";
+        Check(!WriteMp3Id3v2Tags(path, t), "write: unsynchronisation-flagged tag is refused");
+        Check(ReadFile(path) == original, "write: file left byte-for-byte unchanged (unsync refused)");
+
+        std::remove(path.c_str());
+    }
+
+    // WriteMp3Id3v2Tags: a multi-byte UTF-8 title round-trips exactly.
+    {
+        const std::string path = "tags_test_utf8.mp3";
+        WriteFile(path, "AUDIO-ONLY-NO-TAG");
+
+        TagInfo t;
+        t.title = "Caf\xC3\xA9 \xE6\x97\xA5\xE6\x9C\xAC"; // "Café 日本"
+        Check(WriteMp3Id3v2Tags(path, t), "write: multi-byte UTF-8 title write succeeds");
+        Check(ReadTrackTags(path).title == t.title, "write: multi-byte UTF-8 title round-trips exactly");
+
+        std::remove(path.c_str());
     }
 
     if (g_failures == 0) {

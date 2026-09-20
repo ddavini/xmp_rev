@@ -1,7 +1,9 @@
 #include "audio/tags.h"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
+#include <cstdio>
 #include <fstream>
 
 #include "dr_flac.h"
@@ -23,6 +25,22 @@ uint32_t SyncSafe32(const std::string& s, size_t off) {
 uint32_t Plain32(const std::string& s, size_t off) {
     return (static_cast<uint32_t>(U8(s, off)) << 24) | (static_cast<uint32_t>(U8(s, off + 1)) << 16) |
            (static_cast<uint32_t>(U8(s, off + 2)) << 8) | static_cast<uint32_t>(U8(s, off + 3));
+}
+
+// Write-direction counterparts of SyncSafe32/Plain32, for building a new
+// ID3v2 tag/frame header rather than parsing an existing one.
+void WriteSyncSafe32(std::string& s, size_t off, uint32_t v) {
+    s[off] = static_cast<char>((v >> 21) & 0x7F);
+    s[off + 1] = static_cast<char>((v >> 14) & 0x7F);
+    s[off + 2] = static_cast<char>((v >> 7) & 0x7F);
+    s[off + 3] = static_cast<char>(v & 0x7F);
+}
+
+void WritePlain32(std::string& s, size_t off, uint32_t v) {
+    s[off] = static_cast<char>((v >> 24) & 0xFF);
+    s[off + 1] = static_cast<char>((v >> 16) & 0xFF);
+    s[off + 2] = static_cast<char>((v >> 8) & 0xFF);
+    s[off + 3] = static_cast<char>(v & 0xFF);
 }
 
 void AppendUtf8(std::string& out, uint32_t cp) {
@@ -106,6 +124,92 @@ std::string DecodeId3Text(const std::string& data) {
         default:
             return "";
     }
+}
+
+// One ID3v2 frame's complete raw bytes (10-byte frame header + payload),
+// captured as-is during a write-path scan so it can be copied straight
+// through into the rewritten tag without needing to understand it.
+struct RawFrame {
+    std::string id;
+    std::string bytes;
+};
+
+// Write-path counterpart to ParseId3v2Tags' header/frame walk: instead of
+// decoding known frames into a TagInfo, captures every frame found as raw
+// bytes (so unrecognized frames - APIC art, COMM, TXXX, ... - round-trip
+// untouched) and reports which parts of the existing tag (if any) this
+// can't safely reproduce. `fileStart` must hold the first
+// `10 + declaredTagSize` bytes of the file (or fewer, if the file itself
+// is shorter - handled as "malformed, refuse" below rather than guessing).
+//
+// Returns false only for a tag this genuinely can't round-trip safely:
+// ID3v2.2 (3-char frame IDs/3-byte plain sizes - ParseId3v2Tags already
+// treats this as unsupported for reading; here, blindly copying such
+// frames through under a v2.3/v2.4 frame-size format would misread their
+// sizes and corrupt them), an extended header, or the unsynchronisation
+// flag (both rare in practice and not worth threading through a first
+// pass). No ID3v2 tag at all is NOT a failure - it's the common "add tags
+// to a previously untagged file" case, reported as majorVersion=3 (the
+// default for a freshly created tag), an empty frame list, and
+// tagTotalSize=0.
+bool ScanExistingId3v2(const std::string& fileStart, int& majorVersion, std::vector<RawFrame>& frames,
+                       size_t& tagTotalSize) {
+    majorVersion = 3;
+    frames.clear();
+    tagTotalSize = 0;
+    if (fileStart.size() < 10 || fileStart[0] != 'I' || fileStart[1] != 'D' || fileStart[2] != '3') {
+        return true; // no existing tag - nothing to preserve, not an error
+    }
+    const uint8_t verMajor = U8(fileStart, 3);
+    const uint8_t flags = U8(fileStart, 5);
+    if (verMajor < 3 || verMajor > 4) return false; // v2.2 (or a bogus version) - can't safely round-trip
+    if (flags & 0x80) return false;                 // unsynchronisation - not handled
+    if (flags & 0x40) return false;                 // extended header - not handled (keeps scope small)
+
+    const uint32_t declaredSize = SyncSafe32(fileStart, 6);
+    tagTotalSize = 10 + declaredSize;
+    if (fileStart.size() < tagTotalSize) return false; // truncated read - caller didn't pass enough bytes
+    majorVersion = verMajor;
+
+    size_t off = 10;
+    while (off + 10 <= tagTotalSize) {
+        const std::string frameId = fileStart.substr(off, 4);
+        if (frameId == std::string(4, '\0')) break; // padding reached
+        const uint32_t frameSize = majorVersion >= 4 ? SyncSafe32(fileStart, off + 4) : Plain32(fileStart, off + 4);
+        const size_t frameTotal = 10 + frameSize;
+        if (frameSize == 0 || off + frameTotal > tagTotalSize) break; // malformed - stop, same as ParseId3v2Tags
+        frames.push_back({frameId, fileStart.substr(off, frameTotal)});
+        off += frameTotal;
+    }
+    return true;
+}
+
+// Builds one complete text frame (header + payload) for the given 4-char
+// frame id and value, always as UTF-8 (encoding byte 3) - DecodeId3Text
+// already reads that permissively even under v2.3 ("some v2.3 taggers use
+// it too"), and writing a full UTF-16 encoder just to satisfy the letter
+// of the v2.3 spec isn't worth it for a first pass. Frame size is
+// syncsafe for v2.4, plain for v2.3, matching the version this frame is
+// being written under (must match whichever format the tag's own header
+// declares, or a reader would misparse this frame's size).
+std::string BuildTextFrame(const std::string& frameId, const std::string& utf8Value, int majorVersion) {
+    std::string payload;
+    payload += static_cast<char>(3); // UTF-8
+    payload += utf8Value;
+
+    std::string frame(10, '\0');
+    frame[0] = frameId[0];
+    frame[1] = frameId[1];
+    frame[2] = frameId[2];
+    frame[3] = frameId[3];
+    if (majorVersion >= 4) {
+        WriteSyncSafe32(frame, 4, static_cast<uint32_t>(payload.size()));
+    } else {
+        WritePlain32(frame, 4, static_cast<uint32_t>(payload.size()));
+    }
+    // Bytes 8-9 (frame flags) already zeroed by the 10-byte init above.
+    frame += payload;
+    return frame;
 }
 
 } // namespace
@@ -304,6 +408,93 @@ TagInfo ReadTrackTags(const std::string& path) {
         return TagInfo{};
     }
     return TagInfo{};
+}
+
+bool WriteMp3Id3v2Tags(const std::string& path, const TagInfo& tags) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) return false;
+    in.seekg(0, std::ios::end);
+    const std::streamoff fileSize = in.tellg();
+    if (fileSize < 0) return false;
+    in.seekg(0, std::ios::beg);
+
+    // Read the fixed 10-byte header first - only once we've seen its
+    // declared size do we know how much more of the tag to read.
+    std::string head(static_cast<size_t>(std::min<std::streamoff>(fileSize, 10)), '\0');
+    if (!head.empty()) in.read(head.data(), static_cast<std::streamsize>(head.size()));
+    if (head.size() == 10 && head[0] == 'I' && head[1] == 'D' && head[2] == '3') {
+        const uint32_t declaredSize = SyncSafe32(head, 6);
+        const std::streamoff need = 10 + static_cast<std::streamoff>(declaredSize);
+        if (need > fileSize) return false; // declared tag runs past EOF - malformed, refuse
+        head.resize(static_cast<size_t>(need));
+        in.read(head.data() + 10, need - 10);
+        if (in.gcount() != need - 10) return false;
+    }
+
+    int majorVersion = 3;
+    std::vector<RawFrame> frames;
+    size_t tagTotalSize = 0;
+    if (!ScanExistingId3v2(head, majorVersion, frames, tagTotalSize)) return false;
+    const size_t audioStart = tagTotalSize; // 0 if the file had no ID3v2 tag
+
+    // Preserve every frame this call doesn't manage (APIC art, COMM,
+    // TXXX, ...) byte-for-byte; the 5 managed fields get fresh frames
+    // appended below instead of being patched in place - frame order
+    // inside a tag carries no meaning to any reader.
+    auto isManaged = [](const std::string& id) {
+        return id == "TIT2" || id == "TPE1" || id == "TALB" || id == "TCON" || id == "TRCK";
+    };
+    std::string frameBytes;
+    for (const RawFrame& f : frames) {
+        if (!isManaged(f.id)) frameBytes += f.bytes;
+    }
+    auto addFrame = [&](const char* id, const std::string& value) {
+        if (!value.empty()) frameBytes += BuildTextFrame(id, value, majorVersion);
+    };
+    addFrame("TIT2", tags.title);
+    addFrame("TPE1", tags.artist);
+    addFrame("TALB", tags.album);
+    addFrame("TCON", tags.genre);
+    addFrame("TRCK", tags.track);
+
+    std::string newHeader(10, '\0');
+    newHeader[0] = 'I';
+    newHeader[1] = 'D';
+    newHeader[2] = '3';
+    newHeader[3] = static_cast<char>(majorVersion);
+    newHeader[4] = 0; // revision
+    newHeader[5] = 0; // flags
+    WriteSyncSafe32(newHeader, 6, static_cast<uint32_t>(frameBytes.size()));
+
+    const std::string tmpPath = path + ".xmadtmp";
+    {
+        std::ofstream out(tmpPath, std::ios::binary | std::ios::trunc);
+        if (!out) return false;
+        out.write(newHeader.data(), static_cast<std::streamsize>(newHeader.size()));
+        out.write(frameBytes.data(), static_cast<std::streamsize>(frameBytes.size()));
+
+        in.clear();
+        in.seekg(static_cast<std::streamoff>(audioStart), std::ios::beg);
+        std::array<char, 1 << 16> buf{};
+        while (in && out) {
+            in.read(buf.data(), static_cast<std::streamsize>(buf.size()));
+            const std::streamsize got = in.gcount();
+            if (got <= 0) break;
+            out.write(buf.data(), got);
+        }
+        if (!out) {
+            out.close();
+            std::remove(tmpPath.c_str());
+            return false;
+        }
+    }
+    in.close();
+
+    if (std::rename(tmpPath.c_str(), path.c_str()) != 0) {
+        std::remove(tmpPath.c_str());
+        return false;
+    }
+    return true;
 }
 
 } // namespace xmad::audio

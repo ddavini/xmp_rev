@@ -281,8 +281,31 @@ struct InfoFrameKey {
     unsigned channels = 0;
     unsigned sampleRate = 0;
     double durationSeconds = -1.0;
+    int editingField = -1;
+    std::string editBuffer;
+    // Only ticks while a field is actually being edited (see its call
+    // site) - forced to 0 otherwise, so the Info window's dirty-check
+    // stays fully idle when nothing's being typed into, and a blinking
+    // cursor only costs periodic redraws during the interaction that
+    // needs it.
+    int cursorBlinkPhase = 0;
     bool operator==(const InfoFrameKey&) const = default;
 };
+
+// The 5 ID3 fields the Info window shows and (for MP3) lets you click to
+// edit - one table drives drawing, click hit-testing, and committing an
+// edit, instead of hand-duplicating the 5 fields across all three.
+struct InfoTagField {
+    const char* label;
+    std::string audio::TagInfo::*member;
+};
+constexpr std::array<InfoTagField, 5> kInfoTagFields = {{
+    {"Title", &audio::TagInfo::title},
+    {"Artist", &audio::TagInfo::artist},
+    {"Album", &audio::TagInfo::album},
+    {"Genre", &audio::TagInfo::genre},
+    {"Track", &audio::TagInfo::track},
+}};
 
 // Renders a bar whose bottom `litFraction` is filled with a green->amber
 // vertical gradient (green at the base, amber at the tip) and the rest left
@@ -1018,6 +1041,16 @@ int main(int argc, char** argv) {
     // looked "hidden" to the flag check, since they were minimized) - the
     // user caught this in real use after it was reported fixed.
     bool eqUserVisible = true, plUserVisible = true, infoUserVisible = false, aboutUserVisible = false;
+
+    // Info window inline tag-editing state (see kInfoTagFields/drawInfoFrame/
+    // handleInfoClickAt/commitInfoEdit/cancelInfoEdit) - infoFieldRects is
+    // recomputed every drawInfoFrame call so click hit-testing always tests
+    // against whatever rows were actually drawn that frame (a row that
+    // wasn't drawn - FLAC, or no track open - gets a zero-width rect so it
+    // can never hit-test as clickable).
+    int infoEditingField = -1; // index into kInfoTagFields, -1 = not editing
+    std::string infoEditBuffer;
+    std::array<SDL_Rect, kInfoTagFields.size()> infoFieldRects{};
 
     // Our own "is this window currently minimized" bookkeeping, separate
     // again from any SDL flag - real-machine testing showed
@@ -1969,6 +2002,13 @@ int main(int argc, char** argv) {
     // unreadable) falls back to the bare filename. Shared by both windows
     // for the same reason getPlaylistDuration is declared up here.
     std::unordered_map<std::string, std::string> plTitleCache;
+    // Set by commitInfoEdit whenever a saved Title edit erases a
+    // plTitleCache entry, so the Playlist window's own dirty-check (which
+    // doesn't otherwise depend on title text - see PlaylistFrameKey) picks
+    // up the fresh value on its very next check rather than waiting for
+    // some unrelated field to change first. Main's marquee needs no such
+    // flag: it redraws unconditionally every frame already.
+    bool plTitleCacheDirty = false;
     auto getPlaylistDisplayName = [&](size_t idx) -> std::string {
         const std::string& path = playlist.at(idx);
         auto it = plTitleCache.find(path);
@@ -3497,8 +3537,9 @@ int main(int argc, char** argv) {
     // duration (exact for CBR, an honest approximation for VBR - the
     // original's "VBR" flag came from parsing MPEG frame headers, which
     // dr_mp3 doesn't expose), not read from a header field.
-    CachedTextTexture infoTitleTextCache;
+    CachedTextTexture infoTitleTextCache, infoEditTextCache;
     std::array<CachedTextTexture, 12> infoLineTextCache; // >= max lines drawInfoFrame ever produces
+    constexpr int kInfoRightMargin = 8;
 
     auto drawInfoFrame = [&]() {
         SDL_SetRenderDrawColor(infoRenderer, 0x10, 0x12, 0x09, 255);
@@ -3512,27 +3553,46 @@ int main(int argc, char** argv) {
         }
         DrawCloseIcon(infoRenderer, kCloseX, kCloseY, kCloseSize);
 
+        for (auto& r : infoFieldRects) r = SDL_Rect{0, 0, 0, 0};
+
         std::vector<std::string> lines;
+        std::vector<int> lineField; // parallel to lines; kInfoTagFields index, or -1 (not clickable/editable)
         const bool infoTrackOpen = engine.channels() != 0 && playlist.currentIndex() >= 0;
         if (infoTrackOpen) {
             const std::string& path = playlist.at(static_cast<size_t>(playlist.currentIndex()));
             const bool isFlac = lowerExt(path) == "flac";
             lines.push_back("File: " + BaseName(path));
-            // TODO: "reports ID3 values if present" - one line per field
-            // actually populated (audio::ReadTrackTags), not a fixed slot
-            // per field - a track with no tags at all just skips straight
-            // to Format: below, same as before this feature existed.
+            lineField.push_back(-1);
             {
                 const audio::TagInfo tags = audio::ReadTrackTags(path);
-                if (!tags.title.empty()) lines.push_back("Title: " + tags.title);
-                if (!tags.artist.empty()) lines.push_back("Artist: " + tags.artist);
-                if (!tags.album.empty()) lines.push_back("Album: " + tags.album);
-                if (!tags.genre.empty()) lines.push_back("Genre: " + tags.genre);
-                if (!tags.track.empty()) lines.push_back("Track: " + tags.track);
+                if (isFlac) {
+                    // FLAC tags stay read-only (a different format -
+                    // Vorbis comments - with no write path here), so keep
+                    // the original "only show a populated field" display:
+                    // a track with no tags at all skips straight to
+                    // Format: below.
+                    if (!tags.title.empty()) { lines.push_back("Title: " + tags.title); lineField.push_back(-1); }
+                    if (!tags.artist.empty()) { lines.push_back("Artist: " + tags.artist); lineField.push_back(-1); }
+                    if (!tags.album.empty()) { lines.push_back("Album: " + tags.album); lineField.push_back(-1); }
+                    if (!tags.genre.empty()) { lines.push_back("Genre: " + tags.genre); lineField.push_back(-1); }
+                    if (!tags.track.empty()) { lines.push_back("Track: " + tags.track); lineField.push_back(-1); }
+                } else {
+                    // MP3: always show all 5 rows, blank ones included -
+                    // otherwise there'd be no visible/clickable row to
+                    // add a tag field that isn't present yet.
+                    for (size_t f = 0; f < kInfoTagFields.size(); ++f) {
+                        const std::string& value = tags.*(kInfoTagFields[f].member);
+                        lines.push_back(std::string(kInfoTagFields[f].label) + ": " + value);
+                        lineField.push_back(static_cast<int>(f));
+                    }
+                }
             }
             lines.push_back(std::string("Format: ") + (isFlac ? "FLAC" : "MP3"));
+            lineField.push_back(-1);
             lines.push_back(std::string("Mode: ") + (engine.channels() == 1 ? "Mono" : "Stereo"));
+            lineField.push_back(-1);
             lines.push_back("Frequency: " + std::to_string(engine.sampleRate()) + " Hz");
+            lineField.push_back(-1);
             {
                 // Same helper Main's own BitRate readout now uses (see its
                 // comment/the TODO it replaces) - was duplicated inline
@@ -3540,27 +3600,143 @@ int main(int argc, char** argv) {
                 const int kbps = ComputeAvgBitrateKbps(path, engine.durationSeconds());
                 lines.push_back(kbps > 0 ? "Bit Rate (avg): " + std::to_string(kbps) + " Kbit/s"
                                           : "Bit Rate (avg): n/a");
+                lineField.push_back(-1);
             }
             {
                 const int durSec = static_cast<int>(engine.durationSeconds());
                 char buf[32];
                 std::snprintf(buf, sizeof(buf), "Duration: %02d:%02d", durSec / 60, durSec % 60);
                 lines.push_back(buf);
+                lineField.push_back(-1);
             }
             lines.push_back(std::string("Decoder: ") + (isFlac ? "dr_flac" : "dr_mp3"));
+            lineField.push_back(-1);
         } else {
             lines.push_back("No track loaded.");
+            lineField.push_back(-1);
         }
 
         int ly = kInfoTextY0;
         for (size_t i = 0; i < lines.size(); ++i) {
-            const std::string& line = lines[i];
-            DrawTextureAt(infoRenderer,
-                          infoLineTextCache[i].Get(infoRenderer, font, line,
-                                                    static_cast<int>(line.size()) * gfx::BitmapFont::kCellW),
-                          kInfoTextX, ly);
+            const int fieldIdx = lineField[i];
+            if (fieldIdx >= 0 && fieldIdx == infoEditingField) {
+                // The row being edited: "Label: " as usual, then a live
+                // edit box (buffer + blinking cursor) in place of the
+                // on-disk value.
+                const std::string prefix = std::string(kInfoTagFields[static_cast<size_t>(fieldIdx)].label) + ": ";
+                DrawTextureAt(infoRenderer,
+                              infoLineTextCache[i].Get(infoRenderer, font, prefix,
+                                                        static_cast<int>(prefix.size()) * gfx::BitmapFont::kCellW),
+                              kInfoTextX, ly);
+                const int valueX = kInfoTextX + static_cast<int>(prefix.size()) * gfx::BitmapFont::kCellW;
+                const int valueW = std::max(1, kInfoWindowW - kInfoRightMargin - valueX);
+                // Spans the row's full pitch (kInfoLineH), not just the
+                // glyph's own height (kCellH) - a box that size looked
+                // cramped enough to make the typed text hard to read
+                // (real-use feedback). The glyph is vertically centered
+                // in the taller box instead.
+                SDL_Rect box{valueX, ly, valueW, kInfoLineH};
+                SDL_SetRenderDrawColor(infoRenderer, 0x1c, 0x30, 0x18, 255);
+                SDL_RenderFillRect(infoRenderer, &box);
+                SDL_SetRenderDrawColor(infoRenderer, 0x3d, 0xff, 0x74, 255);
+                SDL_RenderDrawRect(infoRenderer, &box);
+                const int textY = ly + (kInfoLineH - gfx::BitmapFont::kCellH) / 2;
+                DrawTextureAt(infoRenderer,
+                              infoEditTextCache.Get(infoRenderer, font, infoEditBuffer,
+                                                     static_cast<int>(infoEditBuffer.size()) *
+                                                         gfx::BitmapFont::kCellW),
+                              valueX + 2, textY);
+                if ((SDL_GetTicks() / 500) % 2 == 0) {
+                    const int cursorX =
+                        valueX + 2 + static_cast<int>(infoEditBuffer.size()) * gfx::BitmapFont::kCellW;
+                    SDL_RenderDrawLine(infoRenderer, cursorX, ly + 1, cursorX, ly + kInfoLineH - 2);
+                }
+            } else {
+                const std::string& line = lines[i];
+                DrawTextureAt(infoRenderer,
+                              infoLineTextCache[i].Get(infoRenderer, font, line,
+                                                        static_cast<int>(line.size()) * gfx::BitmapFont::kCellW),
+                              kInfoTextX, ly);
+            }
+            if (fieldIdx >= 0) {
+                infoFieldRects[static_cast<size_t>(fieldIdx)] =
+                    SDL_Rect{kInfoTextX, ly, kInfoWindowW - kInfoRightMargin - kInfoTextX, kInfoLineH};
+            }
             ly += kInfoLineH;
         }
+    };
+
+    // commitInfoEdit() re-reads current tags from disk (rather than
+    // trusting whatever the last drawInfoFrame happened to read), applies
+    // just the edited field, and writes back - so switching tracks or an
+    // external change to the file between opening the field and committing
+    // it can't clobber the other 4 fields with a stale snapshot.
+    // cancelInfoEdit() shares the same cleanup but discards the buffer.
+    auto commitInfoEdit = [&]() {
+        if (infoEditingField < 0) return;
+        SDL_StopTextInput();
+        const int field = infoEditingField;
+        infoEditingField = -1;
+        if (playlist.currentIndex() >= 0) {
+            const std::string& path = playlist.at(static_cast<size_t>(playlist.currentIndex()));
+            audio::TagInfo tags = audio::ReadTrackTags(path);
+            tags.*(kInfoTagFields[static_cast<size_t>(field)].member) = infoEditBuffer;
+            if (!audio::WriteMp3Id3v2Tags(path, tags)) {
+                // No toast/notification system exists in this app - the
+                // field will simply revert to showing the on-disk value
+                // on the next redraw (still an honest, if quiet, signal
+                // something didn't take).
+                std::fprintf(stderr, "[tags] failed to save %s for %s\n",
+                             kInfoTagFields[static_cast<size_t>(field)].label, path.c_str());
+            } else if (field == 0) {
+                // field 0 is Title (see kInfoTagFields) - getPlaylistDisplayName's
+                // plTitleCache cached this path's title (possibly "", meaning
+                // "show the filename instead") before this edit existed, so a
+                // freshly-added or -changed title wouldn't otherwise be picked
+                // up by the Playlist window or Main's marquee/Now Playing info
+                // until something unrelated happened to evict it.
+                plTitleCache.erase(path);
+                plTitleCacheDirty = true;
+            }
+        }
+        infoEditBuffer.clear();
+    };
+
+    auto cancelInfoEdit = [&]() {
+        if (infoEditingField < 0) return;
+        SDL_StopTextInput();
+        infoEditingField = -1;
+        infoEditBuffer.clear();
+    };
+
+    // Enters edit mode on `field`, pre-filled from a fresh on-disk read.
+    // Shared by click-to-edit and Tab/Shift+Tab field navigation - caller
+    // is responsible for committing/cancelling whatever was being edited
+    // before calling this.
+    auto openInfoField = [&](int field) {
+        if (field < 0 || playlist.currentIndex() < 0) return;
+        const std::string& path = playlist.at(static_cast<size_t>(playlist.currentIndex()));
+        const audio::TagInfo current = audio::ReadTrackTags(path);
+        infoEditingField = field;
+        infoEditBuffer = current.*(kInfoTagFields[static_cast<size_t>(field)].member);
+        SDL_StartTextInput();
+    };
+
+    // Click-to-edit hit-testing against whatever rows drawInfoFrame most
+    // recently actually drew (infoFieldRects) - MP3-only, since that's
+    // the only row shape with rects ever populated (see drawInfoFrame).
+    auto handleInfoClickAt = [&](int lx, int ly) {
+        int clickedField = -1;
+        for (size_t i = 0; i < infoFieldRects.size(); ++i) {
+            const SDL_Rect& r = infoFieldRects[i];
+            if (r.w > 0 && lx >= r.x && lx < r.x + r.w && ly >= r.y && ly < r.y + r.h) {
+                clickedField = static_cast<int>(i);
+                break;
+            }
+        }
+        if (clickedField == infoEditingField) return; // already editing this exact field - keep typing
+        commitInfoEdit(); // save+exit whatever else was being edited (no-op if nothing was)
+        openInfoField(clickedField);
     };
 
     // About window content (TODO: "create about page linked to the
@@ -4033,8 +4209,59 @@ int main(int argc, char** argv) {
     // real click does, not a hand-written imitation of it.
     auto processEvent = [&](const SDL_Event& ev) {
         if (ev.type == SDL_QUIT) running = false;
-        if (ev.type == SDL_KEYDOWN && ev.key.keysym.sym == SDLK_ESCAPE) running = false;
-        if (ev.type == SDL_KEYDOWN && ev.key.keysym.sym == SDLK_x && ev.key.repeat == 0) {
+
+        // Info window inline tag editing eats keyboard input first: while
+        // a field is open, typed text/Enter/Escape/Backspace/Tab belong
+        // to the field, not to the app's global shortcuts below (Escape
+        // quitting the whole app on the very keystroke meant to cancel
+        // an edit would be a nasty surprise, and typing an "x" into a
+        // field shouldn't also toggle X sound).
+        // Captured before any of the edit-mode handling below can mutate
+        // infoEditingField - the two global-shortcut guards further down
+        // need to know whether THIS event started out inside an edit
+        // (e.g. Escape both cancels the edit AND must not also fall
+        // through to quitting the app on the same keystroke).
+        const bool wasEditingInfoField = infoEditingField >= 0;
+
+        if (ev.type == SDL_TEXTINPUT && wasEditingInfoField) {
+            infoEditBuffer += ev.text.text;
+        }
+        if (ev.type == SDL_KEYDOWN && wasEditingInfoField) {
+            switch (ev.key.keysym.sym) {
+                case SDLK_RETURN:
+                case SDLK_KP_ENTER:
+                    commitInfoEdit();
+                    break;
+                case SDLK_ESCAPE:
+                    cancelInfoEdit();
+                    break;
+                case SDLK_BACKSPACE:
+                    if (!infoEditBuffer.empty()) {
+                        // Pop one whole UTF-8 codepoint (trailing
+                        // continuation bytes, then its lead byte), not
+                        // just the last raw byte - otherwise deleting a
+                        // multi-byte character would leave an invalid
+                        // partial sequence in the buffer.
+                        size_t cut = infoEditBuffer.size() - 1;
+                        while (cut > 0 && (static_cast<unsigned char>(infoEditBuffer[cut]) & 0xC0) == 0x80) --cut;
+                        infoEditBuffer.erase(cut);
+                    }
+                    break;
+                case SDLK_TAB: {
+                    const int count = static_cast<int>(kInfoTagFields.size());
+                    const int dir = (SDL_GetModState() & KMOD_SHIFT) ? -1 : 1;
+                    const int next = (infoEditingField + dir + count) % count;
+                    commitInfoEdit();
+                    openInfoField(next);
+                    break;
+                }
+                default:
+                    break;
+            }
+        }
+
+        if (ev.type == SDL_KEYDOWN && ev.key.keysym.sym == SDLK_ESCAPE && !wasEditingInfoField) running = false;
+        if (ev.type == SDL_KEYDOWN && ev.key.keysym.sym == SDLK_x && ev.key.repeat == 0 && !wasEditingInfoField) {
             toggleXSound();
         }
         if (ev.type == SDL_WINDOWEVENT && ev.window.event == SDL_WINDOWEVENT_CLOSE) {
@@ -4555,10 +4782,14 @@ int main(int argc, char** argv) {
                 }
             } else if (ev.button.windowID == infoWindowID) {
                 if (inRect(lx, ly, kCloseX, kCloseY, kCloseSize, kCloseSize)) {
+                    commitInfoEdit(); // save any in-progress edit before hiding the window
                     infoUserVisible = false;
                     SDL_HideWindow(infoWindow);
                 } else if (ly < kDragStripH) {
+                    commitInfoEdit();
                     beginDrag(infoDrag);
+                } else {
+                    handleInfoClickAt(lx, ly);
                 }
             } else if (ev.button.windowID == aboutWindowID) {
                 if (inRect(lx, ly, kCloseX, kCloseY, kCloseSize, kCloseSize)) {
@@ -5032,10 +5263,14 @@ int main(int argc, char** argv) {
             PlaylistFrameKey plKey{playlist.Generation(), playlist.currentIndex(), plSelected,
                                     plScrollOffset,        plPressedButton,        engine.sampleRate(),
                                     engine.channels(),     plSaveMenuOpen,         plClearConfirmOpen};
-            if (!lastPlKey || !(*lastPlKey == plKey)) {
+            // plTitleCacheDirty forces a redraw once after a Title edit
+            // even when plKey itself is unchanged - see its declaration
+            // (PlaylistFrameKey has no title-text field of its own).
+            if (!lastPlKey || !(*lastPlKey == plKey) || plTitleCacheDirty) {
                 drawPlaylistFrame();
                 SDL_RenderPresent(plRenderer);
                 lastPlKey = plKey;
+                plTitleCacheDirty = false;
             }
         }
         if (eqUserVisible && !eqMinimized) {
@@ -5051,8 +5286,14 @@ int main(int argc, char** argv) {
             }
         }
         if (infoUserVisible && !infoMinimized) {
-            InfoFrameKey infoKey{playlist.Generation(), playlist.currentIndex(), engine.channels(),
-                                  engine.sampleRate(),   engine.durationSeconds()};
+            InfoFrameKey infoKey{playlist.Generation(),
+                                  playlist.currentIndex(),
+                                  engine.channels(),
+                                  engine.sampleRate(),
+                                  engine.durationSeconds(),
+                                  infoEditingField,
+                                  infoEditBuffer,
+                                  infoEditingField >= 0 ? static_cast<int>((SDL_GetTicks() / 500) % 2) : 0};
             if (!lastInfoKey || !(*lastInfoKey == infoKey)) {
                 drawInfoFrame();
                 SDL_RenderPresent(infoRenderer);

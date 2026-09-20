@@ -77,4 +77,17 @@ std::string ReadTrackTitle(const std::string& path);
 // though genre is never populated from ID3v1, see TagInfo's comment).
 TagInfo ReadTrackTags(const std::string& path);
 
+// Rewrites path's ID3v2 tag so its TIT2/TPE1/TALB/TCON/TRCK frames match
+// `tags` field-by-field (a field left "" omits/removes that frame). Any
+// other existing frame (APIC album art, COMM, TXXX, ...) is preserved
+// byte-for-byte, untouched. Returns false, leaving the file completely
+// untouched, when the existing tag is something this can't safely
+// round-trip (ID3v2.2, an extended header, or the unsynchronisation flag)
+// rather than guessing. A file with no ID3v2 tag gets a fresh ID3v2.3 one.
+// Writes via a sibling "<path>.xmadtmp" file, atomically renamed over
+// `path` only once fully written - a failure partway through never
+// touches the original. MP3 only; FLAC's tags are a different format
+// (Vorbis comments) with no write path here.
+bool WriteMp3Id3v2Tags(const std::string& path, const TagInfo& tags);
+
 } // namespace xmad::audio
