@@ -303,6 +303,32 @@ void DrawGradientBar(SDL_Renderer* r, int x, int y, int w, int h, float litFract
     }
 }
 
+// Stone Peak Falls' distinguishing look vs. Stone Peak: a classic 3-zone VU
+// meter instead of DrawGradientBar's continuous green-to-amber blend. Each
+// row's color depends on its fixed position in the full bar height (not on
+// how tall the bar currently is), so a bar that only reaches into the green
+// zone stays flat green, one that pokes into the red zone shows a green
+// base + red cap, etc. - the same "zones painted on the track, bar rises
+// through them" behavior as a real VU meter.
+void DrawZonedVuBar(SDL_Renderer* r, int x, int y, int w, int h, float litFraction) {
+    constexpr float kGreenTop = 0.6f;
+    constexpr float kYellowTop = 0.85f;
+    const int litPx = static_cast<int>(h * std::clamp(litFraction, 0.0f, 1.0f));
+    for (int row = 0; row < litPx; ++row) {
+        const float t = static_cast<float>(row) / std::max(1, h - 1); // 0 at base, 1 at tip
+        uint8_t red, green, blue;
+        if (t < kGreenTop) {
+            red = 0x3d; green = 0xff; blue = 0x74; // green
+        } else if (t < kYellowTop) {
+            red = 0xd8; green = 0xe3; blue = 0x00; // amber/yellow
+        } else {
+            red = 0xff; green = 0x30; blue = 0x30; // red
+        }
+        SDL_SetRenderDrawColor(r, red, green, blue, 255);
+        SDL_RenderDrawLine(r, x, y + h - 1 - row, x + w - 1, y + h - 1 - row);
+    }
+}
+
 // Draws a 1px marker line across the column at the given height - the
 // bar-modes' peak-hold dot (blue, dashed in a real screenshot of the
 // original - not the green solid line an earlier pass here guessed at),
@@ -2346,12 +2372,32 @@ int main(int argc, char** argv) {
                             barHeightPx[static_cast<size_t>(i)] =
                                 std::max(targetPx, barHeightPx[static_cast<size_t>(i)] - fallSpeed);
                         }
-                        DrawGradientBar(renderer, bx, kAnalyzerY, barW, kAnalyzerH,
-                                        barHeightPx[static_cast<size_t>(i)] / kAnalyzerH);
+                        // Stone Peak Falls gets the zoned VU coloring (see
+                        // DrawZonedVuBar); Stone Falls/Stone Peak keep the
+                        // original continuous green-to-amber gradient.
+                        if (visMode == VisMode::PeakFalls) {
+                            DrawZonedVuBar(renderer, bx, kAnalyzerY, barW, kAnalyzerH,
+                                           barHeightPx[static_cast<size_t>(i)] / kAnalyzerH);
+                        } else {
+                            DrawGradientBar(renderer, bx, kAnalyzerY, barW, kAnalyzerH,
+                                            barHeightPx[static_cast<size_t>(i)] / kAnalyzerH);
+                        }
 
                         const bool showPeak = visMode != VisMode::NoPeakFalls;
                         if (showPeak) {
-                            if (barHeightPx[static_cast<size_t>(i)] >= peakHeightPx[static_cast<size_t>(i)]) {
+                            // Strictly-greater, not >=: once the creeping
+                            // peak catches down to a resting (or plateaued)
+                            // bar they're momentarily equal, and >= treated
+                            // that as "bar just overtook the peak" and
+                            // re-bounced it up by kPeakOffsetPx forever -
+                            // the line would creep toward the bottom, snap
+                            // back up 5px, and repeat, never actually
+                            // settling. With a resting/equal bar it now
+                            // falls into the creep branch, which floors at
+                            // the bar's own height, so it rests flush on
+                            // the bar (silence -> flush on the floor), like
+                            // the original XMP.
+                            if (barHeightPx[static_cast<size_t>(i)] > peakHeightPx[static_cast<size_t>(i)]) {
                                 peakHeightPx[static_cast<size_t>(i)] =
                                     std::min(static_cast<float>(kAnalyzerH),
                                              barHeightPx[static_cast<size_t>(i)] + kPeakOffsetPx);
