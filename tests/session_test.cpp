@@ -10,8 +10,10 @@
 #include <unordered_map>
 
 using xmad::app::ParseEqPerSong;
+using xmad::app::ParsePlayCounts;
 using xmad::app::ParseSettings;
 using xmad::app::SerializeEqPerSong;
+using xmad::app::SerializePlayCounts;
 using xmad::app::SerializeSettings;
 using xmad::app::Settings;
 
@@ -43,6 +45,7 @@ int main() {
         s.repeat = true;
         s.random = true;
         s.smoothTransition = true;
+        s.showPlayCounter = false;
         s.eqPreset = 1;
         s.eqBands = {60, 40, 20, 0, -20, -20, 0, 20, 40, 60};
         s.visPanel = 2;
@@ -70,6 +73,7 @@ int main() {
         Check(parsed.repeat == true, "round-trip: repeat");
         Check(parsed.random == true, "round-trip: random");
         Check(parsed.smoothTransition == true, "round-trip: smoothTransition");
+        Check(parsed.showPlayCounter == false, "round-trip: showPlayCounter");
         Check(parsed.eqPreset == 1, "round-trip: eqPreset");
         Check(parsed.eqBands == s.eqBands, "round-trip: eqBands");
         Check(parsed.visPanel == 2, "round-trip: visPanel");
@@ -141,6 +145,7 @@ int main() {
         Check(parsed.repeat == false, "missing key keeps default (repeat)");
         Check(parsed.random == false, "missing key keeps default (random)");
         Check(parsed.smoothTransition == false, "missing key keeps default (smoothTransition)");
+        Check(parsed.showPlayCounter == true, "missing key keeps default (showPlayCounter)");
         Check(parsed.eqPreset == -1, "missing key keeps default (eqPreset)");
         Check(parsed.eqBands == Settings{}.eqBands, "missing key keeps default (eqBands)");
         Check(parsed.visPanel == 0, "missing key keeps default (visPanel)");
@@ -211,6 +216,43 @@ int main() {
         Check(parsed["/short.mp3"][0] == 10 && parsed["/short.mp3"][1] == 20 && parsed["/short.mp3"][2] == 30,
               "eq-per-song: short bands - present values parsed");
         Check(parsed["/short.mp3"][3] == 0, "eq-per-song: short bands - missing trailing values default to 0");
+    }
+
+    // SerializePlayCounts/ParsePlayCounts: round-trip with multiple tracks.
+    {
+        std::unordered_map<std::string, uint64_t> counts;
+        counts["/music/track a.mp3"] = 128;
+        counts["/music/track_b.flac"] = 0;
+        const std::string text = SerializePlayCounts(counts);
+
+        std::unordered_map<std::string, uint64_t> parsed;
+        const bool ok = ParsePlayCounts(text, parsed);
+        Check(ok, "play-counts round-trip: parse succeeds");
+        Check(parsed.size() == 2, "play-counts round-trip: both tracks present");
+        Check(parsed.count("/music/track a.mp3") == 1 && parsed["/music/track a.mp3"] == 128,
+              "play-counts round-trip: track a count");
+        Check(parsed.count("/music/track_b.flac") == 1 && parsed["/music/track_b.flac"] == 0,
+              "play-counts round-trip: track b count");
+    }
+
+    // Empty input fails cleanly, same as ParseSettings/ParseEqPerSong - no
+    // file yet on first run with no tracks ever played.
+    {
+        std::unordered_map<std::string, uint64_t> parsed;
+        Check(!ParsePlayCounts("", parsed), "play-counts: empty input fails");
+    }
+
+    // A malformed count for one track is skipped, not fatal - other tracks
+    // in the same file still parse (same tolerant spirit as EqPerSong).
+    {
+        std::unordered_map<std::string, uint64_t> parsed;
+        const bool ok = ParsePlayCounts("/a.mp3=3\n/b.mp3=not-a-number\n/c.mp3=7\n", parsed);
+        Check(ok, "play-counts: mixed valid/invalid lines still succeeds");
+        Check(parsed.count("/a.mp3") == 1 && parsed["/a.mp3"] == 3,
+              "play-counts: track before malformed line still parsed");
+        Check(parsed.count("/b.mp3") == 0, "play-counts: malformed line skipped entirely");
+        Check(parsed.count("/c.mp3") == 1 && parsed["/c.mp3"] == 7,
+              "play-counts: track after malformed line still parsed");
     }
 
     if (g_failures == 0) {

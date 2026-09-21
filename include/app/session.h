@@ -49,6 +49,12 @@ struct Settings {
     // in around a track change, instead of the engine's default instant cut
     // - see Engine::BeginFadeOut/BeginFadeIn.
     bool smoothTransition = false;
+    // Playback > "Show Play Counter" - whether the playlist window's
+    // per-row play count is drawn at all. The counts themselves live in
+    // play_counts.cfg (see PlayCountsPath()/SerializePlayCounts below,
+    // same per-track-keyed-file reasoning as perSongEq's bands), since
+    // they're keyed data, not a single flat value.
+    bool showPlayCounter = true;
     // TODO: "EQ mode not saved". eqPreset mirrors main.cpp's
     // eqCurrentPreset (-1 = none/manual, matching Form_Load never
     // checking a radio button in the original); eqBands are the actual
@@ -122,6 +128,13 @@ bool ParseSettings(const std::string& text, Settings& out);
 std::string SerializeEqPerSong(const std::unordered_map<std::string, std::array<int, 10>>& bands);
 bool ParseEqPerSong(const std::string& text, std::unordered_map<std::string, std::array<int, 10>>& out);
 
+// Per-track play counts for the playlist window's counter column - one line
+// per track, "path=count". Same tolerant-parsing philosophy as ParseSettings
+// and ParseEqPerSong: a malformed line is skipped rather than rejecting the
+// whole file. A track with no entry here has simply never been played.
+std::string SerializePlayCounts(const std::unordered_map<std::string, uint64_t>& counts);
+bool ParsePlayCounts(const std::string& text, std::unordered_map<std::string, uint64_t>& out);
+
 // Where the settings file, the resumed session's playlist, and the
 // per-song EQ file live. A flat ~/.xmad-revival directory (created on
 // first save if missing), not the original's App.Path\xmp.ini - this
@@ -130,11 +143,14 @@ bool ParseEqPerSong(const std::string& text, std::unordered_map<std::string, std
 std::string SettingsFilePath();
 std::string SessionPlaylistPath();
 std::string EqPerSongPath();
+std::string PlayCountsPath();
 
 // Thin OS-touching wrappers around the pure functions above.
 bool SaveSettingsFile(const std::string& path, const Settings& s);
 bool LoadSettingsFile(const std::string& path, Settings& out);
 bool SaveEqPerSongFile(const std::string& path, const std::unordered_map<std::string, std::array<int, 10>>& bands);
 bool LoadEqPerSongFile(const std::string& path, std::unordered_map<std::string, std::array<int, 10>>& out);
+bool SavePlayCountsFile(const std::string& path, const std::unordered_map<std::string, uint64_t>& counts);
+bool LoadPlayCountsFile(const std::string& path, std::unordered_map<std::string, uint64_t>& out);
 
 } // namespace xmad::app

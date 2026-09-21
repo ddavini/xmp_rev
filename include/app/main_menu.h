@@ -102,6 +102,7 @@ enum class PlaybackMenuAction : int32_t {
     ToggleRepeat = 0,
     ToggleRandom = 1,
     ToggleSmoothTransition = 2,
+    ToggleShowPlayCounter = 3,
 };
 
 // Bundles all Playback toggle states in one call, same reasoning as
@@ -110,6 +111,7 @@ struct PlaybackMenuState {
     bool repeat = false;
     bool random = false;
     bool smoothTransition = false;
+    bool showPlayCounter = false;
 };
 
 // Updates the Repeat/Random items' checkmarks - call once after

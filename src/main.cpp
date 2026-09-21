@@ -264,6 +264,12 @@ struct PlaylistFrameKey {
     unsigned channels = 0;
     bool saveMenuOpen = false;
     bool clearConfirmOpen = false;
+    // Toggling Playback > Show Play Counter doesn't touch any of the other
+    // fields above, so without its own field here the window wouldn't
+    // redraw when the toggle flips. The counter *value* changing is
+    // already covered for free - it only ever changes together with
+    // currentIndex, via openPlaylistIndex.
+    bool showPlayCounter = false;
     bool operator==(const PlaylistFrameKey&) const = default;
 };
 
@@ -847,6 +853,10 @@ int main(int argc, char** argv) {
     // renderer-creation time below) so it's available for potatoMenuState()
     // and the menu's initial checkmark, same as the other two Potato flags.
     bool forceSoftwareRenderer = false;
+    // Playback > "Show Play Counter": a display preference, not playback
+    // state, so it gets this same resumeSession-independent early load
+    // rather than the repeat/random treatment further below.
+    bool showPlayCounterEnabled = true;
     {
         app::Settings scalePrefs;
         if (app::LoadSettingsFile(app::SettingsFilePath(), scalePrefs)) {
@@ -855,6 +865,7 @@ int main(int argc, char** argv) {
             potatoCheapVisualizer = scalePrefs.potatoCheapVisualizer;
             potatoDisableTrayAnim = scalePrefs.potatoDisableTrayAnim;
             forceSoftwareRenderer = scalePrefs.forceSoftwareRenderer;
+            showPlayCounterEnabled = scalePrefs.showPlayCounter;
         }
     }
     const bool dumpingAnyFrameEarly = !dumpFramePath.empty() || !dumpPlaylistFramePath.empty() ||
@@ -1166,7 +1177,7 @@ int main(int argc, char** argv) {
 #ifdef __APPLE__
     // Same reasoning as effectsMenuState above, for the Playback submenu.
     auto playbackMenuState = [&]() {
-        return app::PlaybackMenuState{repeatEnabled, randomEnabled, smoothTransitionEnabled};
+        return app::PlaybackMenuState{repeatEnabled, randomEnabled, smoothTransitionEnabled, showPlayCounterEnabled};
     };
     // Same reasoning again, for the Potato submenu. potatoLowFps/
     // potatoCheapVisualizer/potatoDisableTrayAnim/forceSoftwareRenderer are
@@ -1688,6 +1699,12 @@ int main(int argc, char** argv) {
         app::SetPlaybackMenuChecked(playbackMenuState());
 #endif
     };
+    auto toggleShowPlayCounter = [&]() {
+        showPlayCounterEnabled = !showPlayCounterEnabled;
+#ifdef __APPLE__
+        app::SetPlaybackMenuChecked(playbackMenuState());
+#endif
+    };
 #ifdef __APPLE__
     app::SetPlaybackMenuChecked(playbackMenuState()); // reflect resumed Playback state immediately
 #endif
@@ -1823,9 +1840,19 @@ int main(int argc, char** argv) {
     // down). No-op (default) until that real body is assigned.
     std::function<void()> applyPerSongEqForCurrentTrack = [] {};
 
+    // Playback > Show Play Counter's backing data: how many times each
+    // track has been opened for playback. Keyed by path like
+    // perSongEqBands, but loaded unconditionally here (not gated on
+    // resumeSession) and declared this early - unlike perSongEqBands it
+    // needs to be visible to openPlaylistIndex itself, not just to
+    // drawPlaylistFrame further down.
+    std::unordered_map<std::string, uint64_t> playCounts;
+    app::LoadPlayCountsFile(app::PlayCountsPath(), playCounts); // no warning if missing - first run has none yet
+
     auto openPlaylistIndex = [&](int idx) {
         if (idx < 0 || static_cast<size_t>(idx) >= playlist.size()) return;
         playlist.SetCurrentIndex(idx);
+        ++playCounts[playlist.at(static_cast<size_t>(idx))];
         engine.Open(playlist.at(static_cast<size_t>(idx)));
         notifyNowPlayingChanged(true);
         applyPerSongEqForCurrentTrack();
@@ -2756,8 +2783,10 @@ int main(int argc, char** argv) {
             }
         } else if (optionsMenuLevel == OptionsMenuLevel::Playback) {
             Bevel::Draw(renderer, kPlaybackMenuX, kPlaybackMenuY, kPlaybackMenuW, kPlaybackMenuH);
-            static const char* kPlaybackMenuLabels[kPlaybackMenuItems] = {"REPEAT", "RANDOM", "SMOOTH FADE"};
-            const bool playbackOn[kPlaybackMenuItems] = {repeatEnabled, randomEnabled, smoothTransitionEnabled};
+            static const char* kPlaybackMenuLabels[kPlaybackMenuItems] = {"REPEAT", "RANDOM", "SMOOTH FADE",
+                                                                            "PLAY COUNT"};
+            const bool playbackOn[kPlaybackMenuItems] = {repeatEnabled, randomEnabled, smoothTransitionEnabled,
+                                                          showPlayCounterEnabled};
             for (int i = 0; i < kPlaybackMenuItems; ++i) {
                 const int iy = kPlaybackMenuY + i * kOptionsMenuItemH;
                 if (playbackOn[i]) {
@@ -2962,6 +2991,10 @@ int main(int argc, char** argv) {
 
     CachedTextTexture plTitleTextCache;
     std::array<CachedTextTexture, kPlVisibleRows> plRowTextCache;
+    // Separate from plRowTextCache above: the dim tint (SDL_SetTextureColorMod)
+    // applies per-texture, so the play count can't just be appended to the
+    // row label's own cached texture.
+    std::array<CachedTextTexture, kPlVisibleRows> plCountTextCache;
     CachedTextTexture plInfo0TextCache, plInfo1TextCache;
     std::array<CachedTextTexture, 2> plSaveMenuTextCache; // Quick Save, Save As...
     std::array<CachedTextTexture, 3> plClearConfirmTextCache; // label, YES, NO
@@ -3005,7 +3038,13 @@ int main(int argc, char** argv) {
                 SDL_RenderDrawRect(plRenderer, &bg);
             }
 
-            const int maxChars = (plListTextW - 4) / gfx::BitmapFont::kCellW;
+            // Reserves room for the play-count column only while it's
+            // actually shown - a short playlist (or the toggle switched
+            // off) gets the full row width back, same conditional-width
+            // spirit as the scrollbar's plListTextW above.
+            const int counterReserve = showPlayCounterEnabled
+                ? (kPlaylistCounterChars * gfx::BitmapFont::kCellW + kPlaylistCounterGap) : 0;
+            const int maxChars = (plListTextW - 4 - counterReserve) / gfx::BitmapFont::kCellW;
             // Mirrors "DurataStream(...) & ' - ' & name" (see
             // getPlaylistDuration's doc comment above); name is the tagged
             // title if present, else the filename (getPlaylistDisplayName).
@@ -3016,6 +3055,28 @@ int main(int argc, char** argv) {
                           plRowTextCache[static_cast<size_t>(row)].Get(
                               plRenderer, font, label, static_cast<int>(label.size()) * gfx::BitmapFont::kCellW),
                           kPlaylistListX + 2, ry + 1);
+
+            if (showPlayCounterEnabled) {
+                const auto countIt = playCounts.find(playlist.at(static_cast<size_t>(idx)));
+                const uint64_t count = countIt != playCounts.end() ? countIt->second : 0;
+                // A never-played track shows nothing, not "0" - the column
+                // still reserves its width (see counterReserve/maxChars
+                // above) so truncation stays consistent row to row, it just
+                // has nothing drawn in it for this particular row.
+                if (count > 0) {
+                    std::string countStr = std::to_string(count);
+                    // Clip like the label above rather than overflow into
+                    // the list border/scrollbar - a track played 10000+
+                    // times just shows its last 4 digits.
+                    if (static_cast<int>(countStr.size()) > kPlaylistCounterChars) {
+                        countStr = countStr.substr(countStr.size() - static_cast<size_t>(kPlaylistCounterChars));
+                    }
+                    const int countW = static_cast<int>(countStr.size()) * gfx::BitmapFont::kCellW;
+                    SDL_Texture* countTex = plCountTextCache[static_cast<size_t>(row)].Get(plRenderer, font, countStr, countW);
+                    SDL_SetTextureColorMod(countTex, 0x99, 0x99, 0x99); // dimmed relative to the full-brightness label
+                    DrawTextureAt(plRenderer, countTex, kPlaylistListX + plListTextW - countW - 2, ry + 1);
+                }
+            }
         }
 
         SDL_SetRenderDrawColor(plRenderer, 0x23, 0x26, 0x20, 255);
@@ -4393,6 +4454,7 @@ int main(int argc, char** argv) {
                 case app::PlaybackMenuAction::ToggleRepeat: toggleRepeat(); break;
                 case app::PlaybackMenuAction::ToggleRandom: toggleRandom(); break;
                 case app::PlaybackMenuAction::ToggleSmoothTransition: toggleSmoothTransition(); break;
+                case app::PlaybackMenuAction::ToggleShowPlayCounter: toggleShowPlayCounter(); break;
             }
         }
         // Posted by main_menu.mm's Potato-menu items.
@@ -4644,6 +4706,7 @@ int main(int argc, char** argv) {
                             case 0: toggleRepeat(); break;
                             case 1: toggleRandom(); break;
                             case 2: toggleSmoothTransition(); break;
+                            case 3: toggleShowPlayCounter(); break;
                         }
                     }
                 } else if (optionsMenuLevel == OptionsMenuLevel::Potato) {
@@ -5262,7 +5325,8 @@ int main(int argc, char** argv) {
         if (plUserVisible && !plMinimized) {
             PlaylistFrameKey plKey{playlist.Generation(), playlist.currentIndex(), plSelected,
                                     plScrollOffset,        plPressedButton,        engine.sampleRate(),
-                                    engine.channels(),     plSaveMenuOpen,         plClearConfirmOpen};
+                                    engine.channels(),     plSaveMenuOpen,         plClearConfirmOpen,
+                                    showPlayCounterEnabled};
             // plTitleCacheDirty forces a redraw once after a Title edit
             // even when plKey itself is unchanged - see its declaration
             // (PlaylistFrameKey has no title-text field of its own).
@@ -5348,6 +5412,7 @@ int main(int argc, char** argv) {
         toSave.repeat = repeatEnabled;
         toSave.random = randomEnabled;
         toSave.smoothTransition = smoothTransitionEnabled;
+        toSave.showPlayCounter = showPlayCounterEnabled;
         toSave.eqPreset = eqCurrentPreset;
         toSave.visPanel = static_cast<int>(visPanel);
         toSave.perSongEq = perSongEqEnabled;
@@ -5362,6 +5427,7 @@ int main(int argc, char** argv) {
         app::SaveSettingsFile(app::SettingsFilePath(), toSave);
         playlist.SaveM3U(app::SessionPlaylistPath());
         app::SaveEqPerSongFile(app::EqPerSongPath(), perSongEqBands);
+        app::SavePlayCountsFile(app::PlayCountsPath(), playCounts);
     }
 
     SDL_DestroyRenderer(aboutRenderer);

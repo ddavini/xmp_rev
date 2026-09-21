@@ -136,7 +136,7 @@ constexpr int kOptionsMenuTopH = kOptionsMenuItemH * kOptionsMenuTopItems;
 constexpr int kOptionsMenuTopX = kEffectsToggleX;
 constexpr int kOptionsMenuTopY = kEffectsToggleY - kOptionsMenuTopH;
 
-constexpr int kPlaybackMenuItems = 3; // Repeat, Random, Smooth Transition
+constexpr int kPlaybackMenuItems = 4; // Repeat, Random, Smooth Transition, Show Play Counter
 constexpr int kPlaybackMenuW = kEffectsMenuW;
 constexpr int kPlaybackMenuH = kOptionsMenuItemH * kPlaybackMenuItems;
 constexpr int kPlaybackMenuX = kEffectsToggleX;
@@ -208,6 +208,13 @@ constexpr int kPlaylistWindowH = 140;
 // (8 rows) - screen-fit trumps row count, and it still scrolls.
 constexpr int kPlaylistListX = 8, kPlaylistListY = 24, kPlaylistListW = 314, kPlaylistListH = 80;
 constexpr int kPlaylistRowH = 10;
+// Per-row play counter (Playback > Show Play Counter): a right-aligned,
+// dimmed count reserving room for up to 4 digits ("9999") plus a small gap
+// from the track label - only eats into the row's text width when the
+// toggle is actually on, same spirit as the scrollbar's conditional
+// maxChars/row-width above.
+constexpr int kPlaylistCounterChars = 4;
+constexpr int kPlaylistCounterGap = 3;
 // Real button size (PICCLEAR/PICDELETE/PICSAVE/FRECCIAUP/FRECCIADWN/
 // PICSEEK are all 14x14) - an earlier pass here sized the hitboxes to 23px
 // (copied from the transport row's 23x13 icons) without checking these are

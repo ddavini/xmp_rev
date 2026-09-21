@@ -27,6 +27,7 @@ std::string SerializeSettings(const Settings& s) {
     out << "REPEAT=" << (s.repeat ? 1 : 0) << "\n";
     out << "RANDOM=" << (s.random ? 1 : 0) << "\n";
     out << "SMOOTHTRANSITION=" << (s.smoothTransition ? 1 : 0) << "\n";
+    out << "SHOWPLAYCOUNTER=" << (s.showPlayCounter ? 1 : 0) << "\n";
     out << "EQPRESET=" << s.eqPreset << "\n";
     out << "EQBANDS=";
     for (size_t i = 0; i < s.eqBands.size(); ++i) {
@@ -69,6 +70,7 @@ bool ParseSettings(const std::string& text, Settings& out) {
             else if (key == "REPEAT") out.repeat = std::stoi(value) != 0;
             else if (key == "RANDOM") out.random = std::stoi(value) != 0;
             else if (key == "SMOOTHTRANSITION") out.smoothTransition = std::stoi(value) != 0;
+            else if (key == "SHOWPLAYCOUNTER") out.showPlayCounter = std::stoi(value) != 0;
             else if (key == "VISPANEL") out.visPanel = std::stoi(value);
             else if (key == "EQPRESET") out.eqPreset = std::stoi(value);
             else if (key == "PERSONGEQ") out.perSongEq = std::stoi(value) != 0;
@@ -139,6 +141,34 @@ bool ParseEqPerSong(const std::string& text, std::unordered_map<std::string, std
     return true;
 }
 
+std::string SerializePlayCounts(const std::unordered_map<std::string, uint64_t>& counts) {
+    std::ostringstream out;
+    for (const auto& [path, count] : counts) {
+        out << path << "=" << count << "\n";
+    }
+    return out.str();
+}
+
+bool ParsePlayCounts(const std::string& text, std::unordered_map<std::string, uint64_t>& out) {
+    if (text.empty()) return false;
+    std::istringstream in(text);
+    std::string line;
+    while (std::getline(in, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line.empty()) continue;
+        const auto eq = line.find('=');
+        if (eq == std::string::npos) continue;
+        const std::string path = line.substr(0, eq);
+        const std::string value = line.substr(eq + 1);
+        try {
+            out[path] = std::stoull(value);
+        } catch (const std::exception&) {
+            continue; // malformed count for this track - skip the whole line
+        }
+    }
+    return true;
+}
+
 namespace {
 std::string SettingsDir() {
     const char* home = std::getenv("HOME");
@@ -149,6 +179,7 @@ std::string SettingsDir() {
 std::string SettingsFilePath() { return SettingsDir() + "/settings.cfg"; }
 std::string SessionPlaylistPath() { return SettingsDir() + "/session.m3u"; }
 std::string EqPerSongPath() { return SettingsDir() + "/eq_per_song.cfg"; }
+std::string PlayCountsPath() { return SettingsDir() + "/play_counts.cfg"; }
 
 bool SaveSettingsFile(const std::string& path, const Settings& s) {
     mkdir(SettingsDir().c_str(), 0755); // ignores EEXIST; failure surfaces via the ofstream below
@@ -172,6 +203,22 @@ bool LoadEqPerSongFile(const std::string& path, std::unordered_map<std::string, 
     std::ostringstream buf;
     buf << f.rdbuf();
     return ParseEqPerSong(buf.str(), out);
+}
+
+bool SavePlayCountsFile(const std::string& path, const std::unordered_map<std::string, uint64_t>& counts) {
+    mkdir(SettingsDir().c_str(), 0755); // ignores EEXIST; failure surfaces via the ofstream below
+    std::ofstream f(path, std::ios::trunc);
+    if (!f) return false;
+    f << SerializePlayCounts(counts);
+    return static_cast<bool>(f);
+}
+
+bool LoadPlayCountsFile(const std::string& path, std::unordered_map<std::string, uint64_t>& out) {
+    std::ifstream f(path);
+    if (!f) return false;
+    std::ostringstream buf;
+    buf << f.rdbuf();
+    return ParsePlayCounts(buf.str(), out);
 }
 
 bool LoadSettingsFile(const std::string& path, Settings& out) {
