@@ -1369,13 +1369,10 @@ every pass.
 
 - Playlist persistence: in-memory + M3U, not the original's per-entry INI
   temp-file mechanism.
-- Auto-advance wraps at the end of the playlist; the original's `PlayDone`
-  stops at the end unless Repeat/Random is on — neither Repeat nor Random/
-  Shuffle is implemented yet, so wrapping was chosen as the more useful
-  default. Flagged to the user as a possible future point of divergence.
-- Playlist scrollbar thumb/up-down-arrows not implemented (mouse-wheel only).
-- ID3 tag *editing* not implemented (reading the title is, as of this
-  session - see above).
+- ID3 tag *editing* (MP3 only) shipped in `51ffa09` (see "Info-window ID3
+  tag editing" below) - **FLAC tag editing is the remaining gap**: reading a
+  FLAC's Vorbis-comment title already works, but there's no write path yet
+  (current top-of-`TODO` item alongside the Main-window dirty-check).
 - A small "mountain icon" visualization mode hinted at in one reference
   screenshot was never identified/implemented (uncertain what it even is).
 - `LitePic` (the upward-triangle icon next to Minimize) repurposed as
@@ -1383,18 +1380,25 @@ every pass.
   original used it to toggle the Windows systray icon, which doesn't
   apply here (see "Minimize now cascades..." above).
 
+(Auto-advance-wraps-without-Repeat/Random and the missing playlist
+scrollbar, both flagged here in earlier revisions of this file, are no
+longer divergences - see "Playlist scrollbar" and "Repeat / Shuffle" further
+down, both now implemented.)
+
 ## Build & test
 
 ```sh
 cd xmad-revival
-make test          # builds + runs all 11 test binaries
+make test          # builds + runs all test binaries
 make build/xmad     # builds the app
 ./build/xmad assets/skin tests/fixtures/track_a.mp3 tests/fixtures/track_b.mp3
 ```
 
-All 11 tests currently pass: `fft_smoke_test`, `font_render_test`,
+17 tests currently pass: `fft_smoke_test`, `font_render_test`,
 `decoder_test`, `engine_smoke_test`, `eq_test`, `window_snap_test`,
 `file_dialog_test`, `session_test`, `stereo_widen_test`, `tags_test`,
+`playback_mode_test`, `playlist_test`, `chorus_test`, `compressor_test`,
+`reverb_test`, `saturation_test`,
 `level_meter_test`.
 
 Useful debug CLI flags on `build/xmad` (all drive real production code paths,
@@ -1639,12 +1643,136 @@ cases via `--click repeat`/`--click random` -
   every other native-menu-bar feature in this project - this sandbox has
   no real Cocoa runtime to click into).
 
+## 2026-09-16 through 2026-09-21: Linux polish, GPU rendering, tray-icon
+visualizer, Smooth Transition, Info-window ID3 editing, play counter,
+security hardening, iOS/CarPlay abandoned
+
+30 commits landed after the Repeat/Random work above without this file being
+updated alongside them - this section is a catch-up summary written from the
+commit history rather than a live session log, so it's more compressed than
+the entries above (full detail is in each commit message via `git log`).
+
+**Linux taskbar/icon fixes** (`c95c5b8`, `fa4ad03`, `f6fe276`, `b558a2a`,
+`45dbc58`, `b74fb11`, `a826825`): several rounds of real-machine bug reports.
+GNOME Shell's Dash/Alt-Tab/Activities ignore a bare window's `_NET_WM_ICON`
+entirely - they only resolve a custom icon through an installed `.desktop`
+file matched by `StartupWMClass`. Fixed by forcing the X11 SDL video driver
+under Wayland (routes through XWayland) and self-installing
+`~/.local/share/applications/xmad.desktop` on every launch, self-locating via
+`/proc/self/exe` (works from any checkout location or a tarball extracted
+anywhere) - a skip-if-unchanged optimization on that install was tried and
+reverted after confirming on real hardware it broke GNOME Shell's icon
+pickup (`update-desktop-database`/the file-write's inotify event is what
+prompts re-association, not just the first install). Also found
+`SDL_SetWindowIcon` silently zero-lengths `_NET_WM_ICON` above ~240px square
+on this SDL version - icon shrunk from 256x256 to 128x128. Separately fixed
+Linux taskbar-restore needing two clicks: the first click after restoring
+from the taskbar arrives as a bare `SDL_MOUSEBUTTONUP` with no preceding
+DOWN (the WM's click-to-focus consumes the press), and every control here
+fires on DOWN - now tracked and replayed as a synthetic DOWN+UP pair when
+that happens.
+
+**macOS tray-icon visualizer** (`0794779`, `1a0b74a`, `2da0673`; see memory
+`project_tray_icon_visualizer_plan` and `feedback_nsimage_drawinghandler_lazy_capture`):
+while minimized and playing, the `NSStatusItem` now mirrors the main
+window's analyzer (bars or oscilloscope), reverting on pause/stop. First
+pass had a dangling-pointer bug - the `NSImage` `drawingHandler` block
+captured a raw pointer into a per-tick stack buffer that could be read after
+the buffer was gone (the block runs later/repeatedly), producing garbage
+that looked stuck or crashed. Fixed, then dirty-checked (skips the AppKit
+image-reassignment call when levels haven't meaningfully changed, cutting
+CPU while minimized) and given its own Potato-menu-independent
+"Disable Tray Anim" toggle.
+
+**GPU-accelerated rendering + Potato mode** (`17e8e85`, `1f6be13`,
+`28fc6c4`, `b2b566b`, `f7e5e6b`, `7cab272`): all 5 windows switched from
+`SDL_RENDERER_SOFTWARE` to `SDL_RENDERER_ACCELERATED` (software fallback
+kept; `--dump-*-frame` still forces software since this sandbox can't read
+back accelerated output - confirmed byte-identical dumps before/after).
+Roughly halved foreground CPU on the user's real machine. Alongside it: a
+new Options > Potato menu (30 FPS cap + "Cheap Visualizer" skipping
+FFT/oscilloscope/CardioOSC/tray-anim in favor of the static IdleLogo, plus a
+"Force Software Rendering (restart)" escape hatch), the previously-dead
+ShowVol button repurposed as a one-click "Full Potato Mode" toggle, a fix
+for the CardioOSC panel recreating 2 SDL textures every single frame
+(now updates persistent textures in place - was the single worst per-frame
+cost in the app), a fix for rendering freezing entirely while a native Cocoa
+menu is open (nested run-loop starves the normal loop; fixed via an
+`NSTimer` scheduled in `NSEventTrackingRunLoopMode`), and raising secondary
+windows (not just Main) when restoring from minimized/tray. **`f7e5e6b`
+explicitly deferred adding a Main-window dirty-check here** ("higher-risk-
+than-reward... GPU acceleration already cut its cost a lot") - this is
+exactly the current top `TODO` line, now that CPU is being revisited again.
+
+**Smooth Transition** (`831df89`): a new off-by-default Playback-menu option
+that fades the outgoing track out and the incoming one in
+(`Engine::BeginFadeOut`/`BeginFadeIn`, a gain ramp) instead of the instant
+cut `Engine::Open()` normally does on every track change - same
+menu/settings/toggle pattern as Repeat/Random/Potato.
+
+**Info-window ID3 tag editing** (`51ffa09`): the other half of the old "ID3
+tag editing not implemented" divergence. Click Title/Artist/Album/Genre/
+Track in the Info window (MP3 only) to edit inline; new
+`audio::WriteMp3Id3v2Tags` rewrites just those 5 frames while preserving
+every other existing frame (album art, comments, ...) byte-for-byte, refuses
+to touch a tag it can't safely round-trip (v2.2, extended header,
+unsynchronisation), and writes via temp-file + atomic rename. FLAC stays
+read-only (Vorbis comments, different format/path - now the "FLAC tag
+editing" `TODO` line). A saved title now also correctly invalidates the
+Playlist/Main-marquee title cache instead of continuing to show the
+filename.
+
+**Playlist window polish** (`8bfe264`, `3806bd6`): a per-track play counter
+(dimmed, right-aligned, persisted to `~/.xmad-revival/play_counts.cfg`,
+toggle in the Playback menu, defaults on, increments on real track-open not
+session-resume) plus a fix for the selection outline's left edge getting
+silently overwritten by the list's own border (border was drawn after the
+row-highlight loop instead of before - only mattered once the scrollbar made
+a row highlight's right edge differ from the border's).
+
+**Security review hardening** (`67601de`): reviewed for buffer overflows/
+code execution reachable from a malicious audio file - no memory-corruption
+path found, but fixed two real DoS bugs (`ReadMp3Tags` allocating up to
+~256MiB from an attacker-declared ID3v2 size before checking the real file
+length; a 32-bit `10 + frameSize` overflow in `ScanExistingId3v2` that could
+let a malformed frame slip past its bounds check) and hardened a latent
+shell/AppleScript injection primitive in `SaveNativeFileDialog` (not
+reachable by any file today, but `defaultName` was interpolated unescaped -
+added `EscapeForAppleScriptString`/`EscapeForShellSingleQuoted`, applied at
+all 3 interpolation sites, also fixed a fully-unquoted `kdialog` argument
+found along the way). Confirmed vendored dr_mp3/dr_flac aren't affected by
+two known dr_libs CVEs (this project only uses their streaming decode APIs,
+never the vulnerable whole-file convenience functions).
+
+**Also this window**: Stone Peak Falls got real zoned green/yellow/red VU
+coloring plus a fix for its peak-hold marker never settling on silence
+(`>=` vs `>` off-by-one kept re-triggering the bounce); the release codename
+was renamed BETA GOJIRA -> **RC GOJIRA** (`c7be5a5`, superseding "ALPHA
+GOJIRA" as documented earlier in this file); and **the iOS/CarPlay idea was
+removed from `TODO` entirely** (`2e44821`) - see memory
+`project_carplay_ios_port_on_hold` (now updated to reflect outright
+abandonment, not just "on hold").
+
+Version climbed from the pre-Repeat/Random baseline to **1.2.81** across
+this span (`include/app/version.h`), test suite grew from 11 to 17 binaries
+(`chorus_test`/`compressor_test`/`reverb_test`/`saturation_test`/
+`playlist_test` predate this span but were never added to this file's
+Build & test list either - now fixed above - plus `playback_mode_test` from
+the Repeat/Random work).
+
 ## How to resume
 
 Just point me at this file, or at `TODO` (a running list the user adds to
 directly - work through it one line at a time, confirming each before
-starting, per their instruction). Nothing is mid-edit right now - the
-Repeat/Random playback-modes feature is complete, tested, and the full
-test suite is green. Next up on `TODO`: ID3 tag editing and two iOS/
-CarPlay items (the CarPlay port itself is on hold - see the top of this
-file's history for why).
+starting, per their instruction). Nothing is mid-edit right now - full test
+suite green as of the last commit (`2e44821`). Current `TODO` has two open
+items:
+1. **CPU: a Main-window dirty-check** - the one window the earlier CPU work
+   (`f7e5e6b`, see above) deliberately left out; skip redraw+present when
+   Main is fully idle instead of always drawing at the frame-cap rate.
+2. **FLAC tag editing** - MP3/ID3 tag editing shipped (`51ffa09`); FLAC's
+   Vorbis-comment tags are still read-only, need a real write path.
+
+The Repeat/Random playback-modes feature (previous section) and everything
+in the 2026-09-16..09-21 catch-up section above are both complete, tested,
+and the full test suite is green.
