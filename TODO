@@ -1,4 +1,3 @@
-- Look into porting to iOS for Carplay integration
 - CPU: add a Main-window dirty-check (like PL/EQ/Info already have) so it
   skips redraw+present when fully idle, instead of always drawing at the
   frame-cap rate.
