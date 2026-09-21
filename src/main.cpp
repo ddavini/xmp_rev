@@ -3016,6 +3016,17 @@ int main(int argc, char** argv) {
         const bool plScrollVisible = plScrollbarVisible();
         const int plListTextW = plScrollVisible ? (kPlaylistListW - kPlaylistScrollW) : kPlaylistListW;
 
+        // Drawn before the rows below, not after: this shares its left edge
+        // (x = kPlaylistListX) with every row highlight's left edge, and
+        // drawing it second used to overwrite that edge with this dim
+        // border color - cutting the left side off the selection outline
+        // whenever the scrollbar's presence made the row highlight's right
+        // edge land somewhere other than the border's own right edge (so
+        // only the left edge coincided and got overdrawn).
+        SDL_SetRenderDrawColor(plRenderer, 0x23, 0x26, 0x20, 255);
+        SDL_Rect listBorder{kPlaylistListX, kPlaylistListY, kPlaylistListW, kPlaylistListH};
+        SDL_RenderDrawRect(plRenderer, &listBorder);
+
         for (int row = 0; row < kPlVisibleRows; ++row) {
             const int idx = plScrollOffset + row;
             if (idx < 0 || static_cast<size_t>(idx) >= playlist.size()) break;
@@ -3078,10 +3089,6 @@ int main(int argc, char** argv) {
                 }
             }
         }
-
-        SDL_SetRenderDrawColor(plRenderer, 0x23, 0x26, 0x20, 255);
-        SDL_Rect listBorder{kPlaylistListX, kPlaylistListY, kPlaylistListW, kPlaylistListH};
-        SDL_RenderDrawRect(plRenderer, &listBorder);
 
         if (plScrollVisible) {
             // Track background, dim like the list interior itself.
