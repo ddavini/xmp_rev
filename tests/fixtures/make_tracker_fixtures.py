@@ -12,15 +12,24 @@ and S3M - so the tone is base_rate * 4 / 32:
 At a 48000 Hz render rate the song lasts 64 rows * 6 ticks * 960 samples per
 tick (48000 * 5 / (2 * 125)) = 368640 frames.
 
-.mdz/.xmz are just gzip of the plain files (OpenMPT's convention).
+The compressed variants mirror what's found in the wild. Classic
+MODPlug-era .mdz/.xmz/.s3z files are ordinary PKZIP archives:
+  tone.mdz       : zip, deflated, one entry "tone.mod"
+  tone.xmz       : zip, deflated, a "readme.txt" entry *before* "tone.xm"
+                   (the loader must pick the module, not the first entry)
+  tone.s3z       : zip, stored (no compression), entry "TONE.S3M"
+Some later tools wrote plain gzip under the same extensions instead:
+  tone_gzip.mdz  : gzip of tone.mod
 
 Run from the repo root: python3 tests/fixtures/make_tracker_fixtures.py
 """
 
 import gzip
+import io
 import math
 import os
 import struct
+import zipfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -117,6 +126,17 @@ def make_s3m():
     return bytes(out)
 
 
+def make_zip(entries, method):
+    """entries: [(name, bytes)]. Fixed timestamps keep the output byte-identical across runs."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        for entry_name, data in entries:
+            info = zipfile.ZipInfo(entry_name, date_time=(1997, 1, 1, 0, 0, 0))
+            info.compress_type = method
+            z.writestr(info, data)
+    return buf.getvalue()
+
+
 def write(filename, data):
     with open(os.path.join(HERE, filename), "wb") as f:
         f.write(data)
@@ -127,9 +147,12 @@ def main():
     write("tone.mod", mod)
     write("tone.xm", xm)
     write("tone.s3m", s3m)
+    write("tone.mdz", make_zip([("tone.mod", mod)], zipfile.ZIP_DEFLATED))
+    readme = b"Tone fixture for X.MaD Player Revival's decoder tests.\r\n"
+    write("tone.xmz", make_zip([("readme.txt", readme), ("tone.xm", xm)], zipfile.ZIP_DEFLATED))
+    write("tone.s3z", make_zip([("TONE.S3M", s3m)], zipfile.ZIP_STORED))
     # mtime=0 keeps the gzip output byte-identical across runs.
-    write("tone.mdz", gzip.compress(mod, mtime=0))
-    write("tone.xmz", gzip.compress(xm, mtime=0))
+    write("tone_gzip.mdz", gzip.compress(mod, mtime=0))
 
 
 if __name__ == "__main__":

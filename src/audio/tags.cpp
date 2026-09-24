@@ -407,8 +407,8 @@ TagInfo ReadFlacTags(const std::string& path) {
 std::string ReadFlacTitle(const std::string& path) { return ReadFlacTags(path).title; }
 
 // Enough for every format's name field (S3M's "SCRM" magic at 44..47 is the
-// furthest byte ParseModuleTitle looks at). Read through the same gzip layer
-// as playback, so .mdz/.xmz/.s3z only inflate this far, not the whole file.
+// furthest byte ParseModuleTitle looks at). Read through the same zip/gzip
+// layer as playback, so .mdz/.xmz/.s3z only inflate this far.
 constexpr size_t kModuleHeadBytes = 64;
 
 } // namespace

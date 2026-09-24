@@ -1,7 +1,7 @@
 CXX ?= clang++
 SDL2_CFLAGS := $(shell pkg-config --cflags sdl2 2>/dev/null)
 SDL2_LIBS := $(shell pkg-config --libs sdl2 2>/dev/null)
-# zlib for the gzip-wrapped tracker modules (.mdz/.xmz/.s3z) - system
+# zlib for the zip/gzip-compressed tracker modules (.mdz/.xmz/.s3z) - system
 # library, present on macOS and every mainstream Linux distro; falls back
 # to a bare -lz where there's no zlib.pc.
 ZLIB_CFLAGS := $(shell pkg-config --cflags zlib 2>/dev/null)

@@ -474,8 +474,15 @@ int main() {
         // End to end through ReadTrackTitle, including the gzip layer
         // (tests/fixtures/make_tracker_fixtures.py).
         Check(ReadTrackTitle("tests/fixtures/tone.mod") == "MOD Tone Fixture", "module: ReadTrackTitle on .mod");
-        Check(ReadTrackTitle("tests/fixtures/tone.mdz") == "MOD Tone Fixture", "module: ReadTrackTitle on gzipped .mdz");
-        Check(ReadTrackTitle("tests/fixtures/tone.xmz") == "XM Tone Fixture", "module: ReadTrackTitle on gzipped .xmz");
+        Check(ReadTrackTitle("tests/fixtures/tone.mdz") == "MOD Tone Fixture", "module: ReadTrackTitle on zipped .mdz");
+        Check(ReadTrackTitle("tests/fixtures/tone.xmz") == "XM Tone Fixture",
+              "module: ReadTrackTitle on zipped .xmz picks the module, not the readme before it");
+        Check(ReadTrackTitle("tests/fixtures/tone.s3z") == "S3M Tone Fixture", "module: ReadTrackTitle on stored-zip .s3z");
+        Check(ReadTrackTitle("tests/fixtures/tone_gzip.mdz") == "MOD Tone Fixture",
+              "module: ReadTrackTitle on gzipped .mdz");
+        Check(xmad::audio::DetectModuleCompression("tests/fixtures/tone.mdz") == "zip", "module: zip detected");
+        Check(xmad::audio::DetectModuleCompression("tests/fixtures/tone_gzip.mdz") == "gzip", "module: gzip detected");
+        Check(xmad::audio::DetectModuleCompression("tests/fixtures/tone.mod").empty(), "module: raw has no compression");
         Check(ReadTrackTitle("tests/fixtures/tone.s3m") == "S3M Tone Fixture", "module: ReadTrackTitle on .s3m");
         Check(ReadTrackTitle("tests/fixtures/does_not_exist.xm").empty(), "module: missing file yields empty title");
     }

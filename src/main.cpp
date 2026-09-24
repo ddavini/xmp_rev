@@ -3696,7 +3696,8 @@ int main(int argc, char** argv) {
                     // doesn't reliably say which tracker wrote it.
                     formatName = audio::DetectModuleFormat(audio::ReadModuleHead(path, 64));
                     if (formatName.empty()) formatName = "Module";
-                    if (ext == "mdz" || ext == "xmz" || ext == "s3z") formatName += " (gzip)";
+                    if (const std::string c = audio::DetectModuleCompression(path); !c.empty())
+                        formatName += " (" + c + ")";
                 }
                 lines.push_back("Format: " + formatName);
             }

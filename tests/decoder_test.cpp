@@ -12,6 +12,9 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <fstream>
+#include <iterator>
+#include <string>
 #include <vector>
 
 namespace {
@@ -146,6 +149,34 @@ bool CheckTrackerLengthAndSeek(const std::string& path) {
     return true;
 }
 
+// A zip entry using a method we can't decompress (6 = PKZIP 1.x
+// "implode") must fail loudly at open, not be handed to ibxm as garbage -
+// which would "load" as a silent, broken MOD. Made by patching the method
+// field of the stored fixture's entry in both headers.
+bool CheckUnsupportedZipMethodRejected() {
+    std::printf("--- zip with unsupported compression method ---\n");
+    std::ifstream in("tests/fixtures/tone.s3z", std::ios::binary);
+    std::string zip((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    const size_t central = zip.find("PK\x01\x02");
+    if (zip.size() < 30 || central == std::string::npos) {
+        std::printf("FAIL: fixture tone.s3z isn't the expected single-entry zip\n");
+        return false;
+    }
+    zip[8] = 6;           // local file header: compression method
+    zip[central + 10] = 6; // central directory entry: compression method
+    const std::string path = "build/unsupported_method.s3z";
+    std::ofstream(path, std::ios::binary) << zip;
+    try {
+        xmad::audio::OpenDecoder(path);
+    } catch (const std::exception& e) {
+        const bool clear = std::string(e.what()).find("unsupported zip compression method 6") != std::string::npos;
+        std::printf("threw: %s\n%s\n", e.what(), clear ? "PASS" : "FAIL: error doesn't name the problem");
+        return clear;
+    }
+    std::printf("FAIL: opened without error\n");
+    return false;
+}
+
 } // namespace
 
 int main() {
@@ -159,9 +190,12 @@ int main() {
     ok &= CheckFileDecodesToTone("tests/fixtures/tone.xm", 8363.0 / 8);
     ok &= CheckFileDecodesToTone("tests/fixtures/tone.xmz", 8363.0 / 8);
     ok &= CheckFileDecodesToTone("tests/fixtures/tone.s3m", 8363.0 / 8);
+    ok &= CheckFileDecodesToTone("tests/fixtures/tone.s3z", 8363.0 / 8);      // zip, stored
+    ok &= CheckFileDecodesToTone("tests/fixtures/tone_gzip.mdz", 8287.0 / 8); // gzip, not zip
     for (const char* f : {"tests/fixtures/tone.mod", "tests/fixtures/tone.mdz", "tests/fixtures/tone.xm",
                           "tests/fixtures/tone.s3m"})
         ok &= CheckTrackerLengthAndSeek(f);
+    ok &= CheckUnsupportedZipMethodRejected();
     std::printf(ok ? "ALL PASS\n" : "SOME FAILED\n");
     return ok ? 0 : 1;
 }

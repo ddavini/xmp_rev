@@ -5,11 +5,14 @@
 #include <vector>
 
 // Tracker module files (ProTracker MOD, FastTracker II XM, Scream Tracker 3
-// S3M) and their gzip-wrapped variants (.mdz/.xmz/.s3z - OpenMPT's
-// space-saving convention, gzip(.mod)/gzip(.xm)/gzip(.s3m)). Shared by
-// tracker_decoder.cpp (playback) and tags.cpp (title) so both see the same
-// decompressed bytes - neither ibxm nor any other tracker library handles
-// the gzip layer itself.
+// S3M) and their compressed variants (.mdz/.xmz/.s3z). Those come in two
+// flavors: the classic MODPlug-era ones are ordinary PKZIP archives holding
+// the module (the common case - a real collection's .mdz/.xmz files turned
+// out to be these, not gzip as first assumed), while some later tools
+// wrote plain gzip streams under the same extensions. Both are handled,
+// told apart by content. Shared by tracker_decoder.cpp (playback) and
+// tags.cpp (title) so both see the same decompressed bytes - neither ibxm
+// nor any other tracker library handles the compression itself.
 
 namespace xmad::audio {
 
@@ -17,12 +20,14 @@ namespace xmad::audio {
 // every other extension check in this codebase).
 bool IsTrackerExtension(const std::string& ext);
 
-// Reads up to `maxBytes` of the file's *decompressed* content. Goes through
-// zlib's gzread, which inflates a gzip stream and passes any other file
-// through byte-for-byte, so a misnamed file (a plain .mod saved as .mdz, or
-// vice versa) still loads - deciding by content instead of trusting the
-// extension. Throws std::runtime_error if the file can't be opened, is a
-// corrupt gzip stream, or decompresses past `maxBytes` (a gzip bomb guard,
+// Reads the file's *decompressed* module bytes: from a zip archive
+// ("PK\3\4"), the first entry named .mod/.xm/.s3m (else the largest
+// entry), stored or deflated; from a gzip stream, its content; anything
+// else is taken as a raw module. Decided by content, not extension, so a
+// misnamed file (a plain .mod saved as .mdz, or vice versa) still loads.
+// Throws std::runtime_error if the file can't be opened, is corrupt, uses
+// an unsupported zip method (pre-PKZIP-2.0 "implode", deflate64,
+// encryption), or is/decompresses past `maxBytes` (a zip/gzip bomb guard,
 // not an expected case - real modules are a few MB at most).
 std::vector<char> ReadModuleFile(const std::string& path, size_t maxBytes);
 
@@ -30,6 +35,10 @@ std::vector<char> ReadModuleFile(const std::string& path, size_t maxBytes);
 // that as an error - for reading just the header. Never throws; returns
 // whatever it could read (possibly empty).
 std::vector<char> ReadModuleHead(const std::string& path, size_t maxBytes);
+
+// "zip", "gzip", or "" (uncompressed / unreadable), from the file's first
+// bytes - for the Info window's Format line.
+std::string DetectModuleCompression(const std::string& path);
 
 // Pure parsing over already-decompressed bytes (see tags_test.cpp). The
 // song name lives at a fixed offset whose position depends on the format,
