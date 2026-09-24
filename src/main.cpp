@@ -889,6 +889,22 @@ int main(int argc, char** argv) {
     // enters that loop, so it needs no forcing.
     if (dumpingAnyFrameEarly) potatoCheapVisualizer = false;
     double scale = uiScalePercent / 100.0;
+    // Mouse event coordinates -> design pixels. Real SDL2 delivers them in
+    // window points (design px * scale), untouched by SDL_RenderSetScale
+    // when no logical size is set, so we divide by `scale` ourselves.
+    // sdl2-compat (SDL2's API over SDL3 - what Homebrew's "sdl2" became)
+    // instead runs every mouse event through SDL3's
+    // ConvertEventToRenderCoordinates, which applies ApplyHiDpiRenderScale's
+    // render scale - and since that scale maps backing pixels onto the
+    // design size, its events arrive already in design pixels. Dividing
+    // again put every click at 1/scale of where it really was (fine only at
+    // 100% UI scale). sdl2-compat marks itself by setting SDL2_COMPAT=1 in
+    // the environment when it loads, before main(). SDL_GetMouseState/
+    // SDL_GetGlobalMouseState are NOT converted by it, so the window-drag
+    // code that uses those is unaffected.
+    const bool mouseEventsInDesignPx = std::getenv("SDL2_COMPAT") != nullptr;
+    auto mouseToDesign = [&](int v) { return mouseEventsInDesignPx ? v : static_cast<int>(v / scale); };
+    auto designToMouse = [&](int v) { return mouseEventsInDesignPx ? v : ScaledDim(v, scale); };
 #ifdef __APPLE__
     app::SetUiScaleMenuChecked(uiScalePercent); // reflect a resumed non-default scale immediately
     app::SetPotatoMenuChecked(app::PotatoMenuState{potatoLowFps, potatoCheapVisualizer, potatoDisableTrayAnim,
@@ -4668,7 +4684,7 @@ int main(int argc, char** argv) {
                 SDL_RaiseWindow(clicked);
             }
 
-            const int lx = static_cast<int>(ev.button.x / scale), ly = static_cast<int>(ev.button.y / scale);
+            const int lx = mouseToDesign(ev.button.x), ly = mouseToDesign(ev.button.y);
             if (ev.button.windowID == mainWindowID) {
                 // Warns before UtilityAction::FullPotato turns Potato mode
                 // on - checked first, same "any click while open
@@ -4931,17 +4947,17 @@ int main(int argc, char** argv) {
             // leave the drag frozen mid-air even though the window itself
             // never got a mouse-up.
             if (volDragging && ev.motion.windowID == mainWindowID) {
-                handleVolSliderClickAt(static_cast<int>(ev.motion.y / scale));
+                handleVolSliderClickAt(mouseToDesign(ev.motion.y));
             }
             if (seekDragging && ev.motion.windowID == mainWindowID) {
-                handleSeekBarClickAt(static_cast<int>(ev.motion.x / scale));
+                handleSeekBarClickAt(mouseToDesign(ev.motion.x));
             }
             if (plScrollDragging && ev.motion.windowID == plWindowID) {
-                handlePlaylistScrollClickAt(static_cast<int>(ev.motion.y / scale));
+                handlePlaylistScrollClickAt(mouseToDesign(ev.motion.y));
             }
             if (ev.motion.windowID == mainWindowID) {
-                mainMouseX = static_cast<int>(ev.motion.x / scale);
-                mainMouseY = static_cast<int>(ev.motion.y / scale);
+                mainMouseX = mouseToDesign(ev.motion.x);
+                mainMouseY = mouseToDesign(ev.motion.y);
             }
         } else if (ev.type == SDL_WINDOWEVENT && ev.window.event == SDL_WINDOWEVENT_LEAVE &&
                    ev.window.windowID == mainWindowID) {
@@ -5065,16 +5081,16 @@ int main(int argc, char** argv) {
         down.type = SDL_MOUSEBUTTONDOWN;
         down.button.button = SDL_BUTTON_LEFT;
         down.button.windowID = targetID;
-        down.button.x = ScaledDim(lx, scale);
-        down.button.y = ScaledDim(ly, scale);
+        down.button.x = designToMouse(lx);
+        down.button.y = designToMouse(ly);
         processEvent(down);
 
         SDL_Event up{};
         up.type = SDL_MOUSEBUTTONUP;
         up.button.button = SDL_BUTTON_LEFT;
         up.button.windowID = targetID;
-        up.button.x = ScaledDim(lx, scale);
-        up.button.y = ScaledDim(ly, scale);
+        up.button.x = designToMouse(lx);
+        up.button.y = designToMouse(ly);
         processEvent(up);
 
         int px, py, ex, ey;
