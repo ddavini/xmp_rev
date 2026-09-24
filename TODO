@@ -3,3 +3,5 @@
   frame-cap rate.
 - FLAC tag editing (ID3 editing only covers MP3 so far - FLAC's tags are
   Vorbis comments, a different format/write path, still read-only)
+- Tracker module support (MOD/XM/S3M, incl. gzip-wrapped .mdz/.xmz/.s3z) -
+  feasibility plan written up, see nostalgia.md. Not started.
