@@ -485,6 +485,39 @@ int main() {
         Check(xmad::audio::DetectModuleCompression("tests/fixtures/tone.mod").empty(), "module: raw has no compression");
         Check(ReadTrackTitle("tests/fixtures/tone.s3m") == "S3M Tone Fixture", "module: ReadTrackTitle on .s3m");
         Check(ReadTrackTitle("tests/fixtures/does_not_exist.xm").empty(), "module: missing file yields empty title");
+        Check(ReadTrackTitle("tests/fixtures/tone15.mod") == "MOD Tone Fixture",
+              "module: 15-sample MOD title (same offset as 31-sample)");
+    }
+
+    // --- 15-sample Soundtracker -> 31-sample "M.K." conversion ---
+    {
+        using xmad::audio::ConvertSoundtracker15;
+        auto readBytes = [](const char* path) {
+            const std::string s = ReadFile(path);
+            return std::vector<char>(s.begin(), s.end());
+        };
+        const std::vector<char> st15 = readBytes("tests/fixtures/tone15.mod");
+        const std::vector<char> mk = readBytes("tests/fixtures/tone.mod");
+        std::vector<char> converted = ConvertSoundtracker15(st15);
+        Check(converted.size() == mk.size(), "st15: converted size matches the 31-sample layout");
+        if (converted.size() == mk.size() && converted.size() > 951) {
+            Check(static_cast<unsigned char>(converted[951]) == 120, "st15: tempo byte carried to 951");
+            converted[951] = mk[951];
+            Check(converted == mk, "st15: converted file is byte-identical to the 31-sample original otherwise");
+        }
+        // Everything ibxm already reads must pass through untouched.
+        for (const char* f : {"tests/fixtures/tone.mod", "tests/fixtures/tone.xm", "tests/fixtures/tone.s3m"}) {
+            const std::vector<char> b = readBytes(f);
+            Check(ConvertSoundtracker15(b) == b, "st15: tagged MOD / XM / S3M left unchanged");
+        }
+        // Shape checks: a header whose orders point past the file's end
+        // isn't a 15-sample module, just garbage - leave it alone.
+        std::vector<char> bogus = st15;
+        bogus[472] = 40; // order 0 -> pattern 40, needs 41 patterns the file doesn't have
+        Check(ConvertSoundtracker15(bogus) == bogus, "st15: orders needing absent patterns -> not converted");
+        std::vector<char> loud = st15;
+        loud[20 + 25] = 100; // sample 1 volume > 64
+        Check(ConvertSoundtracker15(loud) == loud, "st15: out-of-range sample volume -> not converted");
     }
 
     if (g_failures == 0) {

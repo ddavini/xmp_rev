@@ -192,8 +192,9 @@ int main() {
     ok &= CheckFileDecodesToTone("tests/fixtures/tone.s3m", 8363.0 / 8);
     ok &= CheckFileDecodesToTone("tests/fixtures/tone.s3z", 8363.0 / 8);      // zip, stored
     ok &= CheckFileDecodesToTone("tests/fixtures/tone_gzip.mdz", 8287.0 / 8); // gzip, not zip
+    ok &= CheckFileDecodesToTone("tests/fixtures/tone15.mod", 8287.0 / 8);    // 15-sample Soundtracker
     for (const char* f : {"tests/fixtures/tone.mod", "tests/fixtures/tone.mdz", "tests/fixtures/tone.xm",
-                          "tests/fixtures/tone.s3m"})
+                          "tests/fixtures/tone.s3m", "tests/fixtures/tone15.mod"})
         ok &= CheckTrackerLengthAndSeek(f);
     ok &= CheckUnsupportedZipMethodRejected();
     std::printf(ok ? "ALL PASS\n" : "SOME FAILED\n");

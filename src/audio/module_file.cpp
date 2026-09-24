@@ -200,6 +200,49 @@ std::string FixedName(const std::vector<char>& head, size_t offset, size_t len) 
 
 } // namespace
 
+std::vector<char> ConvertSoundtracker15(const std::vector<char>& mod) {
+    // 15-sample layout: title (20) + 15 * 30-byte sample headers = 470,
+    // then song length, a restart/tempo byte, 128 orders = 600; patterns
+    // follow at 600. The 31-sample layout puts the song length at 950 and
+    // "M.K." at 1080, patterns at 1084.
+    constexpr size_t kHeader15 = 20 + 15 * 30; // 470
+    constexpr size_t kPatterns15 = kHeader15 + 2 + 128; // 600
+    if (mod.size() < kPatterns15 + 1024) return mod;
+    if (HasAt(mod, 0, "Extended Module:") || HasAt(mod, 44, "SCRM")) return mod;
+    // Tags ibxm already recognizes at 1080 (its own check: the u16 at 1082).
+    if (mod.size() >= 1084) {
+        const unsigned tag = (static_cast<unsigned char>(mod[1082]) << 8) | static_cast<unsigned char>(mod[1083]);
+        if (tag == 0x4b2e || tag == 0x4b21 || tag == 0x5434 || tag == 0x484e || tag == 0x4348) return mod;
+    }
+    auto u8 = [&](size_t i) { return static_cast<unsigned char>(mod[i]); };
+    for (size_t i = 0; i < 15; ++i) {
+        const size_t h = 20 + i * 30;
+        if (u8(h + 25) > 64) return mod; // volume
+    }
+    const unsigned songLen = u8(kHeader15);
+    if (songLen < 1 || songLen > 128) return mod;
+    unsigned numPatterns = 0;
+    for (size_t i = 0; i < 128; ++i) {
+        const unsigned pat = u8(kHeader15 + 2 + i);
+        if (pat >= 64) return mod;
+        numPatterns = std::max(numPatterns, pat + 1);
+    }
+    if (kPatterns15 + static_cast<size_t>(numPatterns) * 1024 > mod.size()) return mod;
+
+    std::vector<char> out;
+    out.reserve(mod.size() + 16 * 30 + 4);
+    out.insert(out.end(), mod.begin(), mod.begin() + kHeader15);
+    for (int i = 0; i < 16; ++i) {
+        char empty[30] = {};
+        empty[29] = 1; // loop length 1 word = "no loop", as ProTracker writes unused slots
+        out.insert(out.end(), empty, empty + 30);
+    }
+    out.insert(out.end(), mod.begin() + kHeader15, mod.begin() + kPatterns15);
+    out.insert(out.end(), {'M', '.', 'K', '.'});
+    out.insert(out.end(), mod.begin() + kPatterns15, mod.end());
+    return out;
+}
+
 bool IsTrackerExtension(const std::string& ext) {
     return ext == "mod" || ext == "xm" || ext == "s3m" || ext == "mdz" || ext == "xmz" || ext == "s3z";
 }

@@ -27,7 +27,9 @@ constexpr size_t kMaxModuleBytes = 64 * 1024 * 1024;
 class TrackerDecoder : public Decoder {
 public:
     explicit TrackerDecoder(const std::string& path) {
-        std::vector<char> bytes = ReadModuleFile(path, kMaxModuleBytes);
+        // ibxm only knows 31-sample MODs; pre-ProTracker 15-sample ones
+        // are rewritten to that layout first (a no-op for everything else).
+        std::vector<char> bytes = ConvertSoundtracker15(ReadModuleFile(path, kMaxModuleBytes));
         data d{bytes.data(), static_cast<int>(bytes.size())};
         char message[64] = {0};
         // module_load copies every sample into its own allocations, so

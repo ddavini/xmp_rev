@@ -36,6 +36,21 @@ std::vector<char> ReadModuleFile(const std::string& path, size_t maxBytes);
 // whatever it could read (possibly empty).
 std::vector<char> ReadModuleHead(const std::string& path, size_t maxBytes);
 
+// The original Soundtracker MOD format (1987-1990, before ProTracker) has
+// 15 sample slots instead of 31 and no "M.K."-style tag at 1080, so ibxm
+// rejects it ("MOD Format not recognised"). If `mod` looks like one, returns
+// it rewritten to the 31-sample "M.K." layout ibxm plays - 16 empty sample
+// headers padded in after the 15 real ones, "M.K." inserted after the order
+// table, pattern and sample data carried over untouched. Anything else
+// (a tagged MOD, XM, S3M, garbage) comes back unchanged. Recognized by
+// shape, since the format has no signature: volumes <= 64, a 1..128 song
+// length, orders < 64 (Soundtracker's pattern limit), and the patterns
+// those orders need actually fitting in the file.
+// Not emulated: the very first Ultimate Soundtracker's own effect numbering
+// (1 = arpeggio, 2 = pitch bend) and its tempo byte at 471 - later
+// 15-sample trackers mostly used the ProTracker meanings ibxm assumes.
+std::vector<char> ConvertSoundtracker15(const std::vector<char>& mod);
+
 // "zip", "gzip", or "" (uncompressed / unreadable), from the file's first
 // bytes - for the Info window's Format line.
 std::string DetectModuleCompression(const std::string& path);

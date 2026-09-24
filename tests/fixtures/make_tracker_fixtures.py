@@ -20,6 +20,12 @@ MODPlug-era .mdz/.xmz/.s3z files are ordinary PKZIP archives:
   tone.s3z       : zip, stored (no compression), entry "TONE.S3M"
 Some later tools wrote plain gzip under the same extensions instead:
   tone_gzip.mdz  : gzip of tone.mod
+And the pre-ProTracker format ibxm can't read directly:
+  tone15.mod     : the same song as a 15-sample Soundtracker module (no
+                   "M.K." tag, patterns at 600; byte 471 = 120, the
+                   Ultimate Soundtracker tempo byte). ConvertSoundtracker15
+                   must turn it into tone.mod byte for byte, except that
+                   byte (951 after conversion, the restart position there).
 
 Run from the repo root: python3 tests/fixtures/make_tracker_fixtures.py
 """
@@ -44,16 +50,19 @@ def s8(values):
     return bytes(v & 0xFF for v in values)
 
 
-def make_mod():
+def make_mod(num_samples=31):
     out = bytearray(name("MOD Tone Fixture", 20))
-    for i in range(31):
+    for i in range(num_samples):
         if i == 0:
             # name, length (words), finetune, volume, loop start/length (words)
             out += name("sine", 22) + struct.pack(">HBBHH", len(LOOP) // 2, 0, 64, 0, len(LOOP) // 2)
         else:
             out += name("", 22) + struct.pack(">HBBHH", 0, 0, 0, 0, 1)
-    out += bytes([1, 127]) + bytes(128)  # song length, restart, order table (pattern 0)
-    out += b"M.K."
+    if num_samples == 31:
+        out += bytes([1, 127]) + bytes(128)  # song length, restart, order table (pattern 0)
+        out += b"M.K."
+    else:
+        out += bytes([1, 120]) + bytes(128)  # song length, UST tempo byte, order table; no tag
     for row in range(64):
         for ch in range(4):
             if row == 0 and ch == 0:
@@ -147,6 +156,7 @@ def main():
     write("tone.mod", mod)
     write("tone.xm", xm)
     write("tone.s3m", s3m)
+    write("tone15.mod", make_mod(15))
     write("tone.mdz", make_zip([("tone.mod", mod)], zipfile.ZIP_DEFLATED))
     readme = b"Tone fixture for X.MaD Player Revival's decoder tests.\r\n"
     write("tone.xmz", make_zip([("readme.txt", readme), ("tone.xm", xm)], zipfile.ZIP_DEFLATED))
