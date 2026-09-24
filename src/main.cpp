@@ -915,7 +915,14 @@ int main(int argc, char** argv) {
     // way to drag the window by a title bar anymore - both are implemented
     // by hand below (a drawn MenuBarPic close icon, and click-drag-the-body
     // for movement), same as the original had to.
-    const Uint32 kWindowFlags = SDL_WINDOW_SHOWN | SDL_WINDOW_BORDERLESS | SDL_WINDOW_ALLOW_HIGHDPI;
+    // Hidden: every window is created hidden and Main/EQ/Playlist are only
+    // shown once they have a real frame drawn in them (see the reveal just
+    // before the debug hooks). Creating them shown - and Info/About shown
+    // then immediately hidden - put blank black windows on screen for the
+    // whole startup; under SDL3 (via sdl2-compat) macOS also animates
+    // those show/hide transitions, so the Info/About pair visibly faded out
+    // as a second black block beside the main column.
+    const Uint32 kWindowFlags = SDL_WINDOW_HIDDEN | SDL_WINDOW_BORDERLESS | SDL_WINDOW_ALLOW_HIGHDPI;
 
     // Anchored near the top of the screen's *usable* area (excludes the
     // menu bar/dock), not vertically centered: the three windows stack to
@@ -1012,7 +1019,6 @@ int main(int argc, char** argv) {
         return 1;
     }
     ApplyHiDpiRenderScale(infoRenderer, app::layout::kInfoWindowW, app::layout::kInfoWindowH);
-    SDL_HideWindow(infoWindow);
 
     // About window (TODO: "create about page linked to the japanese
     // character click ... with this logo ... and version"). Same
@@ -1033,7 +1039,6 @@ int main(int argc, char** argv) {
         return 1;
     }
     ApplyHiDpiRenderScale(aboutRenderer, app::layout::kAboutWindowW, app::layout::kAboutWindowH);
-    SDL_HideWindow(aboutWindow);
 
 #ifndef __APPLE__
     // macOS gets a correct icon for free from the .app bundle's
@@ -3908,6 +3913,22 @@ int main(int argc, char** argv) {
                           (kAboutWindowW - cw) / 2, kAboutCreditY);
         }
     };
+
+    // Startup reveal (see kWindowFlags): draw Main/EQ/Playlist once, then
+    // show them, so the first thing on screen is the real UI rather than
+    // blank windows sitting there through session resume/playlist loading.
+    // Main last so it ends up the key window. Info/About stay hidden until
+    // toggled. Done here, before the debug hooks below, so they see the
+    // same shown/hidden window state as before.
+    drawFrame();
+    SDL_RenderPresent(renderer);
+    drawEqFrame();
+    SDL_RenderPresent(eqRenderer);
+    drawPlaylistFrame();
+    SDL_RenderPresent(plRenderer);
+    SDL_ShowWindow(plWindow);
+    SDL_ShowWindow(eqWindow);
+    SDL_ShowWindow(window);
 
     for (int i = 0; i < utilClickCount; ++i) {
         // Debug hook: drives handleUtilityPress through the exact same
