@@ -1817,17 +1817,21 @@ confirmed by the user on their real machine:
     now created hidden; Main/EQ/Playlist are drawn once and then shown.
 - Build scripts: Linux installs zlib's dev package; macOS also installs
   `pkg-config` if missing. README gained a Formats section.
-- Not yet run on Linux: zlib linking, the window-startup change, and the
-  mouse conversion under a distro's sdl2-compat (Fedora/Arch ship it too).
+- Linux: user built and ran it in a Parallels VM (Ubuntu, arm64) on
+  2026-09-24 - compiles (zlib linking included) and seems to work fine.
+  Still to check on real Linux hardware, which the user plans to do when
+  they get the chance. Not yet covered: the mouse conversion under a
+  distro's sdl2-compat (Fedora/Arch ship it), unless that VM had it too.
 
 ## How to resume
 
 Just point me at this file, or at `TODO` (a running list the user adds to
 directly - work through it one line at a time, confirming each before
 starting, per their instruction). As of 2026-09-24 the tracker/sdl2-compat
-work above is on branch `tracker-module-support`, awaiting a fast-forward
-merge to `main` and a push (both only on the user's explicit say-so).
-Full test suite green. Current `TODO` has two open items:
+work above is merged to `main` and pushed (`main` == `origin/main` at
+`543659b`); the `tracker-module-support` branch is gone. Full test suite
+green. Only loose end from that work: a real-hardware Linux run (see the
+Linux note in the 2026-09-24 section). Current `TODO` has two open items:
 1. **CPU: a Main-window dirty-check** - the one window the earlier CPU work
    (`f7e5e6b`, see above) deliberately left out; skip redraw+present when
    Main is fully idle instead of always drawing at the frame-cap rate.
