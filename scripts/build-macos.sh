@@ -21,6 +21,15 @@ if ! command -v brew >/dev/null 2>&1; then
     exit 1
 fi
 
+# Homebrew's "sdl2" is now sdl2-compat (the SDL2 API running on SDL3);
+# `make dmg` bundles both libSDL2 and libSDL3 into the .app, so nothing
+# extra is needed here. zlib (for zipped/gzipped tracker modules) ships
+# with macOS itself.
+if ! command -v pkg-config >/dev/null 2>&1; then
+    echo "==> pkg-config not found, installing via Homebrew..."
+    brew install pkg-config
+fi
+
 if ! pkg-config --exists sdl2 2>/dev/null; then
     echo "==> SDL2 not found, installing via Homebrew..."
     brew install sdl2
