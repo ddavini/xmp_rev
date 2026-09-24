@@ -43,7 +43,8 @@ public:
     virtual uint64_t totalFrames() const = 0;
 };
 
-// Picks a decoder by file extension (.mp3 / .flac). Throws std::runtime_error
+// Picks a decoder by file extension (.mp3 / .flac, or a tracker module -
+// see module_file.h's IsTrackerExtension). Throws std::runtime_error
 // on an unrecognized extension or a decode failure.
 std::unique_ptr<Decoder> OpenDecoder(const std::string& path);
 

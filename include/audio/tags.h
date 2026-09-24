@@ -65,7 +65,9 @@ void ParseId3v1Tags(const std::string& tail, TagInfo& out);
 // learn its real size and then exactly that many more bytes (not the
 // whole file) before falling back to the last 128 bytes for ID3v1; for
 // .flac, decodes a VORBIS_COMMENT TITLE via dr_flac's own metadata
-// callback rather than hand-rolling FLAC container parsing. Returns "" on
+// callback rather than hand-rolling FLAC container parsing; for a tracker
+// module (see module_file.h), the song name from its fixed-offset header
+// field, decompressing .mdz/.xmz/.s3z just far enough. Returns "" on
 // any failure, missing file, or absent tag.
 std::string ReadTrackTitle(const std::string& path);
 

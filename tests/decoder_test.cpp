@@ -1,11 +1,15 @@
 // Decodes real-encoded MP3 and FLAC fixtures (a synthetic 880Hz tone, see
 // tests/fixtures/) and confirms the decoded PCM actually contains that
 // tone, using the already-verified SpectrumAnalyzer rather than eyeballing
-// sample counts. "It didn't throw" is not proof a decoder works.
+// sample counts. "It didn't throw" is not proof a decoder works. Same for
+// the tracker-module fixtures (tests/fixtures/make_tracker_fixtures.py),
+// plus their song length and seeking, which - unlike MP3/FLAC - the
+// decoder computes itself by simulating playback.
 
 #include "audio/decoder.h"
 #include "dsp/fft.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <vector>
@@ -63,12 +67,101 @@ bool CheckFileDecodesToTone(const std::string& path, double expectedFreq) {
     return true;
 }
 
+std::vector<float> ReadAll(xmad::audio::Decoder& dec) {
+    std::vector<float> all;
+    std::vector<float> chunk(dec.channels() * 4096);
+    for (;;) {
+        const uint64_t got = dec.ReadFrames(chunk.data(), 4096);
+        if (got == 0) break;
+        all.insert(all.end(), chunk.begin(), chunk.begin() + static_cast<long>(got * dec.channels()));
+    }
+    return all;
+}
+
+// Frames [frame, frame + count) after SeekToFrame(frame), compared against
+// the same span of a straight read from the top. `skip` frames right after
+// the seek point are excluded: ibxm crossfades the first 64 samples of each
+// tick from the previous tick's tail, and a seek restarts that crossfade
+// from silence.
+bool SeekMatches(xmad::audio::Decoder& dec, const std::vector<float>& straight, uint64_t frame, uint64_t skip,
+                 uint64_t count) {
+    if (!dec.SeekToFrame(frame)) {
+        std::printf("FAIL: SeekToFrame(%llu) returned false\n", static_cast<unsigned long long>(frame));
+        return false;
+    }
+    std::vector<float> got((skip + count) * 2);
+    const uint64_t n = dec.ReadFrames(got.data(), skip + count);
+    if (n != skip + count) {
+        std::printf("FAIL: after seek to %llu, read %llu of %llu frames\n", static_cast<unsigned long long>(frame),
+                    static_cast<unsigned long long>(n), static_cast<unsigned long long>(skip + count));
+        return false;
+    }
+    float maxDiff = 0;
+    for (uint64_t i = skip * 2; i < (skip + count) * 2; ++i)
+        maxDiff = std::max(maxDiff, std::fabs(got[i] - straight[frame * 2 + i]));
+    std::printf("seek to %llu: max diff vs straight read %.6f\n", static_cast<unsigned long long>(frame), maxDiff);
+    if (maxDiff > 1e-6f) {
+        std::printf("FAIL: audio after seek doesn't match a straight read\n");
+        return false;
+    }
+    return true;
+}
+
+// Every fixture is the same 64-row song (see make_tracker_fixtures.py):
+// 64 rows * 6 ticks * 960 frames at 48 kHz.
+bool CheckTrackerLengthAndSeek(const std::string& path) {
+    constexpr uint64_t kExpectedFrames = 64 * 6 * 960;
+    constexpr uint64_t kTick = 960;
+    std::printf("--- %s (length/seek) ---\n", path.c_str());
+    auto dec = xmad::audio::OpenDecoder(path);
+    if (dec->totalFrames() != kExpectedFrames) {
+        std::printf("FAIL: totalFrames=%llu, expected %llu\n", static_cast<unsigned long long>(dec->totalFrames()),
+                    static_cast<unsigned long long>(kExpectedFrames));
+        return false;
+    }
+    // Must actually stop there - Engine only detects end-of-track (and the
+    // playlist only advances) when ReadFrames runs dry.
+    const std::vector<float> straight = ReadAll(*dec);
+    if (straight.size() != kExpectedFrames * 2) {
+        std::printf("FAIL: read %zu frames to end of stream, expected %llu\n", straight.size() / 2,
+                    static_cast<unsigned long long>(kExpectedFrames));
+        return false;
+    }
+    // Backward to the very start: bit-exact from frame 0 (a fresh start has
+    // no previous tick to crossfade from either).
+    if (!SeekMatches(*dec, straight, 0, 0, 8192)) return false;
+    // Forward, mid-tick: exact after the first tick boundary past the seek.
+    if (!SeekMatches(*dec, straight, 200000 + 123, kTick, 8192)) return false;
+    // Backward again, then check the stream still ends in the right place.
+    if (!SeekMatches(*dec, straight, 100000, kTick, 4096)) return false;
+    dec->SeekToFrame(kExpectedFrames - 500);
+    std::vector<float> tail(2 * 4096);
+    const uint64_t n = dec->ReadFrames(tail.data(), 4096);
+    if (n != 500 || dec->ReadFrames(tail.data(), 4096) != 0) {
+        std::printf("FAIL: seek near end then read gave %llu frames, expected exactly 500 then 0\n",
+                    static_cast<unsigned long long>(n));
+        return false;
+    }
+    std::printf("PASS\n");
+    return true;
+}
+
 } // namespace
 
 int main() {
     bool ok = true;
     ok &= CheckFileDecodesToTone("tests/fixtures/tone.mp3", 880.0);
     ok &= CheckFileDecodesToTone("tests/fixtures/tone.flac", 880.0);
+    // Middle C of a 32-sample loop holding 4 sine cycles: base rate / 8 -
+    // 8287 Hz for a 4-channel MOD, 8363 Hz for XM/S3M.
+    ok &= CheckFileDecodesToTone("tests/fixtures/tone.mod", 8287.0 / 8);
+    ok &= CheckFileDecodesToTone("tests/fixtures/tone.mdz", 8287.0 / 8);
+    ok &= CheckFileDecodesToTone("tests/fixtures/tone.xm", 8363.0 / 8);
+    ok &= CheckFileDecodesToTone("tests/fixtures/tone.xmz", 8363.0 / 8);
+    ok &= CheckFileDecodesToTone("tests/fixtures/tone.s3m", 8363.0 / 8);
+    for (const char* f : {"tests/fixtures/tone.mod", "tests/fixtures/tone.mdz", "tests/fixtures/tone.xm",
+                          "tests/fixtures/tone.s3m"})
+        ok &= CheckTrackerLengthAndSeek(f);
     std::printf(ok ? "ALL PASS\n" : "SOME FAILED\n");
     return ok ? 0 : 1;
 }

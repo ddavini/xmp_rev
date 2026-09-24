@@ -1,10 +1,15 @@
 CXX ?= clang++
 SDL2_CFLAGS := $(shell pkg-config --cflags sdl2 2>/dev/null)
 SDL2_LIBS := $(shell pkg-config --libs sdl2 2>/dev/null)
+# zlib for the gzip-wrapped tracker modules (.mdz/.xmz/.s3z) - system
+# library, present on macOS and every mainstream Linux distro; falls back
+# to a bare -lz where there's no zlib.pc.
+ZLIB_CFLAGS := $(shell pkg-config --cflags zlib 2>/dev/null)
+ZLIB_LIBS := $(shell pkg-config --libs zlib 2>/dev/null || echo -lz)
 # SDL2_CFLAGS folded in globally: pattern-rule specificity in this Makefile
 # doesn't reliably beat the generic $(BUILD)/%.o rule, and several non-SDL
 # files (engine.h) transitively need SDL2's headers anyway.
-CXXFLAGS := -std=c++20 -O2 -Wall -Wextra -Iinclude -Ithird_party -Wno-unused-parameter -pthread $(SDL2_CFLAGS)
+CXXFLAGS := -std=c++20 -O2 -Wall -Wextra -Iinclude -Ithird_party -Wno-unused-parameter -pthread $(SDL2_CFLAGS) $(ZLIB_CFLAGS)
 AUDIO_CXXFLAGS := $(CXXFLAGS)
 
 BUILD := build
@@ -20,6 +25,9 @@ APP_OBJS := $(patsubst src/%.cpp,$(BUILD)/%.o,$(APP_SRCS))
 
 AUDIO_SRCS := $(wildcard src/audio/*.cpp)
 AUDIO_OBJS := $(patsubst src/%.cpp,$(BUILD)/%.o,$(AUDIO_SRCS))
+# ibxm-ac (MOD/XM/S3M replay) is plain C, vendored verbatim - compiled
+# with warnings off rather than patched to silence them.
+AUDIO_OBJS += $(BUILD)/third_party/ibxm.o
 
 UNAME_S := $(shell uname -s)
 ARCH := $(shell uname -m)
@@ -69,6 +77,10 @@ $(BUILD)/app/%.o: src/app/%.mm
 	$(CXX) $(CXXFLAGS) -fobjc-arc -c $< -o $@
 endif
 
+$(BUILD)/third_party/ibxm.o: third_party/ibxm.c third_party/ibxm.h
+	@mkdir -p $(dir $@)
+	$(CC) -O2 -w -c $< -o $@
+
 $(BUILD)/main.o: src/main.cpp include/app/version.h
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) $(SDL2_CFLAGS) -c $< -o $@
@@ -90,17 +102,17 @@ $(BUILD)/font_render_test: tests/font_render_test.cpp $(GFX_OBJS)
 # --- decoder test --------------------------------------------------------------
 $(BUILD)/decoder_test: tests/decoder_test.cpp $(AUDIO_OBJS) $(DSP_OBJS)
 	@mkdir -p $(BUILD)
-	$(CXX) $(AUDIO_CXXFLAGS) $(SDL2_CFLAGS) $^ -o $@ $(SDL2_LIBS)
+	$(CXX) $(AUDIO_CXXFLAGS) $(SDL2_CFLAGS) $^ -o $@ $(SDL2_LIBS) $(ZLIB_LIBS)
 
 # --- engine smoke test (real-time playback through the real audio device) -----
 $(BUILD)/engine_smoke_test: tests/engine_smoke_test.cpp $(AUDIO_OBJS) $(DSP_OBJS)
 	@mkdir -p $(BUILD)
-	$(CXX) $(AUDIO_CXXFLAGS) $^ -o $@ $(SDL2_LIBS)
+	$(CXX) $(AUDIO_CXXFLAGS) $^ -o $@ $(SDL2_LIBS) $(ZLIB_LIBS)
 
 # --- equalizer test --------------------------------------------------------------
 $(BUILD)/eq_test: tests/eq_test.cpp $(AUDIO_OBJS) $(DSP_OBJS)
 	@mkdir -p $(BUILD)
-	$(CXX) $(AUDIO_CXXFLAGS) $^ -o $@ $(SDL2_LIBS)
+	$(CXX) $(AUDIO_CXXFLAGS) $^ -o $@ $(SDL2_LIBS) $(ZLIB_LIBS)
 
 # --- window snap (magnetic docking) test - no SDL dependency ------------------
 $(BUILD)/window_snap_test: tests/window_snap_test.cpp $(BUILD)/app/window_snap.o
@@ -150,10 +162,12 @@ $(BUILD)/level_meter_test: tests/level_meter_test.cpp $(BUILD)/gfx/level_meter.o
 # --- ID3 title parsing test - pure parsing only, no SDL ---------------------
 # (links dr_impl.o for dr_flac's implementation, which tags.o's FLAC path
 # calls into - only the pure ID3 functions are actually exercised by this
-# test binary, but the symbols still need to resolve.)
-$(BUILD)/tags_test: tests/tags_test.cpp $(BUILD)/audio/tags.o $(BUILD)/audio/dr_impl.o
+# test binary, but the symbols still need to resolve. module_file.o is
+# both: tags.o's tracker path calls it, and its pure title parsing is
+# tested here directly.)
+$(BUILD)/tags_test: tests/tags_test.cpp $(BUILD)/audio/tags.o $(BUILD)/audio/dr_impl.o $(BUILD)/audio/module_file.o
 	@mkdir -p $(BUILD)
-	$(CXX) -std=c++20 -O2 -Wall -Wextra -Iinclude -Ithird_party $^ -o $@
+	$(CXX) -std=c++20 -O2 -Wall -Wextra -Iinclude -Ithird_party $^ -o $@ $(ZLIB_LIBS)
 
 # --- playlist M3U load/save (relative-path resolution) test - no SDL ---------
 $(BUILD)/playlist_test: tests/playlist_test.cpp $(BUILD)/app/playlist.o
@@ -168,7 +182,7 @@ $(BUILD)/playback_mode_test: tests/playback_mode_test.cpp $(BUILD)/app/playback_
 # --- the app -------------------------------------------------------------------
 $(BUILD)/xmad: $(BUILD)/main.o $(GFX_OBJS) $(APP_OBJS) $(DSP_OBJS) $(AUDIO_OBJS)
 	@mkdir -p $(BUILD)
-	$(CXX) $(CXXFLAGS) $^ -o $@ $(SDL2_LIBS) $(FRAMEWORKS)
+	$(CXX) $(CXXFLAGS) $^ -o $@ $(SDL2_LIBS) $(ZLIB_LIBS) $(FRAMEWORKS)
 
 # --- macOS .app bundle, so a Dock/Finder icon (the real extracted SKULL.ico
 # resource) actually applies - a bare Unix executable gets the generic

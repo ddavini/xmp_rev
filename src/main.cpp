@@ -39,6 +39,7 @@
 #include "app/window_snap.h"
 #include "app/skin.h"
 #include "audio/engine.h"
+#include "audio/module_file.h"
 #include "audio/tags.h"
 #include "dsp/fft.h"
 #include "gfx/bitmap_font.h"
@@ -427,7 +428,16 @@ std::string BaseName(const std::string& path) {
 // TODO this replaces - "the Khz and bit rate labels are fake"). Returns
 // -1 if it can't be computed (file unreadable, or duration not yet
 // known), which callers show as a placeholder rather than a bogus 0.
+// Also -1 for tracker modules: they're rendered from note data, not
+// streamed, so file size / duration isn't a bitrate of anything (and for
+// .mdz/.xmz/.s3z it'd be the compressed size besides).
 int ComputeAvgBitrateKbps(const std::string& path, double durationSeconds) {
+    {
+        const auto dot = path.find_last_of('.');
+        std::string ext = dot == std::string::npos ? "" : path.substr(dot + 1);
+        std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return std::tolower(c); });
+        if (audio::IsTrackerExtension(ext)) return -1;
+    }
     std::ifstream f(path, std::ios::binary | std::ios::ate);
     if (!f || durationSeconds <= 0.0) return -1;
     const double bytes = static_cast<double>(f.tellg());
@@ -3308,7 +3318,7 @@ int main(int argc, char** argv) {
             playlist.Clear();
             playlist.LoadM3U(path);
             plSelected = playlist.empty() ? -1 : static_cast<int>(playlist.size()) - 1;
-        } else if (ext == "mp3" || ext == "flac") {
+        } else if (ext == "mp3" || ext == "flac" || audio::IsTrackerExtension(ext)) {
             playlist.Add(path);
             plSelected = static_cast<int>(playlist.size()) - 1;
             ensureRowVisible(plSelected);
@@ -3317,7 +3327,7 @@ int main(int argc, char** argv) {
             // selected" - a dropped/chosen folder (drag-and-drop already
             // passes one straight through unchanged; OpenNativeFileDialog
             // now allows picking a folder too, for the same reason) adds
-            // every .mp3/.flac directly inside it, sorted alphabetically
+            // every .mp3/.flac (and tracker module) directly inside it, sorted alphabetically
             // to match Finder's default order. Not recursive - matches
             // the TODO's literal wording, and avoids a surprise mass
             // import from an accidentally-dropped parent folder.
@@ -3328,7 +3338,8 @@ int main(int argc, char** argv) {
                     for (const auto& entry : std::filesystem::directory_iterator(path)) {
                         if (!entry.is_regular_file()) continue;
                         const std::string entryExt = lowerExt(entry.path().string());
-                        if (entryExt == "mp3" || entryExt == "flac") found.push_back(entry.path().string());
+                        if (entryExt == "mp3" || entryExt == "flac" || audio::IsTrackerExtension(entryExt))
+                            found.push_back(entry.path().string());
                     }
                 } catch (const std::filesystem::filesystem_error&) {
                     // Keep whatever was found before a permission error or
@@ -3628,15 +3639,22 @@ int main(int argc, char** argv) {
         const bool infoTrackOpen = engine.channels() != 0 && playlist.currentIndex() >= 0;
         if (infoTrackOpen) {
             const std::string& path = playlist.at(static_cast<size_t>(playlist.currentIndex()));
-            const bool isFlac = lowerExt(path) == "flac";
+            // Tag editing (WriteMp3Id3v2Tags) is MP3-only, so the Info
+            // window's layout forks on the format, not just its labels.
+            enum class InfoFormat { Mp3, Flac, Tracker };
+            const std::string ext = lowerExt(path);
+            const InfoFormat format = ext == "flac"                     ? InfoFormat::Flac
+                                      : audio::IsTrackerExtension(ext) ? InfoFormat::Tracker
+                                                                        : InfoFormat::Mp3;
             lines.push_back("File: " + BaseName(path));
             lineField.push_back(-1);
             {
                 const audio::TagInfo tags = audio::ReadTrackTags(path);
-                if (isFlac) {
+                if (format != InfoFormat::Mp3) {
                     // FLAC tags stay read-only (a different format -
-                    // Vorbis comments - with no write path here), so keep
-                    // the original "only show a populated field" display:
+                    // Vorbis comments - with no write path here), and a
+                    // module's only "tag" is its song name, so keep the
+                    // original "only show a populated field" display:
                     // a track with no tags at all skips straight to
                     // Format: below.
                     if (!tags.title.empty()) { lines.push_back("Title: " + tags.title); lineField.push_back(-1); }
@@ -3655,7 +3673,17 @@ int main(int argc, char** argv) {
                     }
                 }
             }
-            lines.push_back(std::string("Format: ") + (isFlac ? "FLAC" : "MP3"));
+            {
+                std::string formatName = format == InfoFormat::Flac ? "FLAC" : "MP3";
+                if (format == InfoFormat::Tracker) {
+                    // By content, like the decoder - a module's extension
+                    // doesn't reliably say which tracker wrote it.
+                    formatName = audio::DetectModuleFormat(audio::ReadModuleHead(path, 64));
+                    if (formatName.empty()) formatName = "Module";
+                    if (ext == "mdz" || ext == "xmz" || ext == "s3z") formatName += " (gzip)";
+                }
+                lines.push_back("Format: " + formatName);
+            }
             lineField.push_back(-1);
             lines.push_back(std::string("Mode: ") + (engine.channels() == 1 ? "Mono" : "Stereo"));
             lineField.push_back(-1);
@@ -3677,7 +3705,9 @@ int main(int argc, char** argv) {
                 lines.push_back(buf);
                 lineField.push_back(-1);
             }
-            lines.push_back(std::string("Decoder: ") + (isFlac ? "dr_flac" : "dr_mp3"));
+            lines.push_back(std::string("Decoder: ") + (format == InfoFormat::Flac      ? "dr_flac"
+                                                         : format == InfoFormat::Tracker ? "ibxm-ac"
+                                                                                         : "dr_mp3"));
             lineField.push_back(-1);
         } else {
             lines.push_back("No track loaded.");

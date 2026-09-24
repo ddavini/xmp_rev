@@ -36,7 +36,8 @@ std::string EscapeForAppleScriptString(const std::string& s);
 // Used by SaveNativeFileDialog's Linux branch for the same reason.
 std::string EscapeForShellSingleQuoted(const std::string& s);
 
-// Opens a native file-selection dialog, restricted to mp3/flac/m3u
+// Opens a native file-selection dialog, restricted to mp3/flac/m3u and
+// the tracker-module extensions (audio/module_file.h)
 // (Cocoa panel via osascript on macOS; zenity, falling back to kdialog,
 // on Linux), and returns the chosen paths, or an empty vector if the
 // user cancelled or no dialog helper is available. Blocks until the

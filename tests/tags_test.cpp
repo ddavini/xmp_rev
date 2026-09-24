@@ -1,8 +1,10 @@
-// Covers ParseId3v2Title/ParseId3v1Title, the pure parts of title reading -
+// Covers ParseId3v2Title/ParseId3v1Title and ParseModuleTitle, the pure
+// parts of title reading -
 // ReadTrackTitle's file I/O (and dr_flac's own VORBIS_COMMENT decoding, not
 // reimplemented here) aren't exercised by this binary; see decoder_test /
 // a manual check against a real tagged file for that (audio/tags.h).
 
+#include "audio/module_file.h"
 #include "audio/tags.h"
 
 #include <cstdint>
@@ -11,7 +13,11 @@
 #include <fstream>
 #include <iterator>
 #include <string>
+#include <vector>
 
+using xmad::audio::DetectModuleFormat;
+using xmad::audio::ParseModuleTitle;
+using xmad::audio::ReadTrackTitle;
 using xmad::audio::ParseId3v1Tags;
 using xmad::audio::ParseId3v1Title;
 using xmad::audio::ParseId3v2Tags;
@@ -434,6 +440,44 @@ int main() {
               "write: the overflow-crafted frame's payload bytes are not present anywhere in the rewritten file");
 
         std::remove(path.c_str());
+    }
+
+    // --- Tracker module titles (module_file.h) ---
+    {
+        auto bytes = [](const std::string& s) { return std::vector<char>(s.begin(), s.end()); };
+        // MOD: name is bytes 0..19, NUL-padded; anything without an XM/S3M
+        // signature is treated as MOD.
+        std::string mod = std::string("  Space Debris") + std::string(6, '\0') + std::string(100, 'x');
+        Check(DetectModuleFormat(bytes(mod)) == "MOD", "module: no XM/S3M signature detects as MOD");
+        Check(ParseModuleTitle(bytes(mod)) == "Space Debris", "module: MOD title trimmed at NUL and leading spaces");
+
+        // XM: "Extended Module: " then the 20-byte name at 17.
+        std::string xm = std::string("Extended Module: ") + "Unreal ][         " + "  " + "\x1a" + std::string(40, ' ');
+        Check(DetectModuleFormat(bytes(xm)) == "XM", "module: XM signature detected");
+        Check(ParseModuleTitle(bytes(xm)) == "Unreal ][", "module: XM title at offset 17, trailing spaces trimmed");
+
+        // S3M: 28-byte name at 0, "SCRM" at 44.
+        std::string s3m = std::string("Second Reality") + std::string(14, '\0') + std::string(16, '\0') + "SCRM" +
+                          std::string(16, '\0');
+        Check(DetectModuleFormat(bytes(s3m)) == "S3M", "module: SCRM at 44 detects as S3M");
+        Check(ParseModuleTitle(bytes(s3m)) == "Second Reality", "module: S3M title from 28-byte field");
+
+        // Non-printable bytes (codepage graphics) are dropped, not passed to the font.
+        std::string odd = std::string("A\x01\xb0" "B") + std::string(16, '\0') + std::string(40, '\0');
+        Check(ParseModuleTitle(bytes(odd)) == "AB", "module: non-printable bytes dropped from title");
+
+        // Blank or truncated headers: "" so callers fall back to the filename.
+        Check(ParseModuleTitle(bytes(std::string(64, '\0'))).empty(), "module: all-NUL name yields empty title");
+        Check(ParseModuleTitle(bytes("short")).empty(), "module: header shorter than the name field yields empty");
+        Check(DetectModuleFormat({}).empty(), "module: empty input has no format");
+
+        // End to end through ReadTrackTitle, including the gzip layer
+        // (tests/fixtures/make_tracker_fixtures.py).
+        Check(ReadTrackTitle("tests/fixtures/tone.mod") == "MOD Tone Fixture", "module: ReadTrackTitle on .mod");
+        Check(ReadTrackTitle("tests/fixtures/tone.mdz") == "MOD Tone Fixture", "module: ReadTrackTitle on gzipped .mdz");
+        Check(ReadTrackTitle("tests/fixtures/tone.xmz") == "XM Tone Fixture", "module: ReadTrackTitle on gzipped .xmz");
+        Check(ReadTrackTitle("tests/fixtures/tone.s3m") == "S3M Tone Fixture", "module: ReadTrackTitle on .s3m");
+        Check(ReadTrackTitle("tests/fixtures/does_not_exist.xm").empty(), "module: missing file yields empty title");
     }
 
     if (g_failures == 0) {

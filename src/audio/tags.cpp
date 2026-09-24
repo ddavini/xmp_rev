@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <fstream>
 
+#include "audio/module_file.h"
 #include "dr_flac.h"
 
 namespace xmad::audio {
@@ -405,6 +406,11 @@ TagInfo ReadFlacTags(const std::string& path) {
 
 std::string ReadFlacTitle(const std::string& path) { return ReadFlacTags(path).title; }
 
+// Enough for every format's name field (S3M's "SCRM" magic at 44..47 is the
+// furthest byte ParseModuleTitle looks at). Read through the same gzip layer
+// as playback, so .mdz/.xmz/.s3z only inflate this far, not the whole file.
+constexpr size_t kModuleHeadBytes = 64;
+
 } // namespace
 
 std::string ReadTrackTitle(const std::string& path) {
@@ -415,6 +421,7 @@ std::string ReadTrackTitle(const std::string& path) {
     try {
         if (ext == "mp3") return ReadMp3Title(path);
         if (ext == "flac") return ReadFlacTitle(path);
+        if (IsTrackerExtension(ext)) return ParseModuleTitle(ReadModuleHead(path, kModuleHeadBytes));
     } catch (const std::exception&) {
         return "";
     }
@@ -429,6 +436,12 @@ TagInfo ReadTrackTags(const std::string& path) {
     try {
         if (ext == "mp3") return ReadMp3Tags(path);
         if (ext == "flac") return ReadFlacTags(path);
+        if (IsTrackerExtension(ext)) {
+            // Modules only carry a song name - no artist/album/genre/track.
+            TagInfo out;
+            out.title = ParseModuleTitle(ReadModuleHead(path, kModuleHeadBytes));
+            return out;
+        }
     } catch (const std::exception&) {
         return TagInfo{};
     }

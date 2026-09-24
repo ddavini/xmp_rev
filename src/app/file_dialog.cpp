@@ -79,7 +79,8 @@ std::vector<std::string> OpenNativeFileDialogFiles() {
         "-e 'activate' "
         "-e 'delay 0.15' "
         "-e 'set theFiles to choose file with prompt \"Add to Playlist\" "
-        "of type {\"mp3\",\"flac\",\"m3u\"} with multiple selections allowed' "
+        "of type {\"mp3\",\"flac\",\"mod\",\"xm\",\"s3m\",\"mdz\",\"xmz\",\"s3z\",\"m3u\"} "
+        "with multiple selections allowed' "
         "-e 'end tell' "
         "-e 'set out to \"\"' "
         "-e 'repeat with f in theFiles' "
@@ -91,12 +92,16 @@ std::vector<std::string> OpenNativeFileDialogFiles() {
         "-e 'end try' 2>/dev/null";
 #else
     // zenity is present with nearly every GTK-based desktop's file-manager
-    // stack; kdialog covers KDE-only systems that lack it.
+    // stack; kdialog covers KDE-only systems that lack it. Both match
+    // patterns case-sensitively, so the tracker extensions are listed in
+    // uppercase too - DOS-era modules are very often named SONG.MOD/.XM/.S3M.
     const char* cmd =
         "zenity --file-selection --multiple --title='Add to Playlist' "
-        "--file-filter='Audio/Playlist (mp3, flac, m3u) | *.mp3 *.flac *.m3u' 2>/dev/null "
+        "--file-filter='Audio/Playlist (mp3, flac, mod, xm, s3m, m3u) | *.mp3 *.flac "
+        "*.mod *.xm *.s3m *.mdz *.xmz *.s3z *.MOD *.XM *.S3M *.MDZ *.XMZ *.S3Z *.m3u' 2>/dev/null "
         "|| kdialog --getopenfilename --multiple --separate-output . "
-        "'Audio/Playlist files (*.mp3 *.flac *.m3u)' 2>/dev/null";
+        "'Audio/Playlist files (*.mp3 *.flac *.mod *.xm *.s3m *.mdz *.xmz *.s3z "
+        "*.MOD *.XM *.S3M *.MDZ *.XMZ *.S3Z *.m3u)' 2>/dev/null";
 #endif
     return ParseDialogOutput(RunPipedCommand(cmd));
 }

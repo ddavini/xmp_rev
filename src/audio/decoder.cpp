@@ -4,7 +4,9 @@
 #include <stdexcept>
 
 #include "audio/flac_decoder.h"
+#include "audio/module_file.h"
 #include "audio/mp3_decoder.h"
+#include "audio/tracker_decoder.h"
 
 namespace xmad::audio {
 
@@ -24,6 +26,7 @@ std::unique_ptr<Decoder> OpenDecoder(const std::string& path) {
     const std::string ext = LowerExt(path);
     if (ext == "mp3") return OpenMp3Decoder(path);
     if (ext == "flac") return OpenFlacDecoder(path);
+    if (IsTrackerExtension(ext)) return OpenTrackerDecoder(path);
     throw std::runtime_error("OpenDecoder: unrecognized extension for " + path);
 }
 
