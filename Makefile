@@ -203,6 +203,17 @@ $(APP_BUNDLE): $(BUILD)/xmad assets/icon/Info.plist assets/icon/AppIcon.icns $(w
 	install_name_tool -id "@executable_path/../Frameworks/libSDL2-2.0.0.dylib" "$(APP_BUNDLE)/Contents/Frameworks/libSDL2-2.0.0.dylib" && \
 	install_name_tool -change "$$sdl2_dylib" "@executable_path/../Frameworks/libSDL2-2.0.0.dylib" "$(APP_BUNDLE)/Contents/MacOS/xmad"
 	codesign --force --sign - "$(APP_BUNDLE)/Contents/Frameworks/libSDL2-2.0.0.dylib"
+	# Homebrew's "sdl2" is now sdl2-compat: the SDL2 API as a shim that
+	# dlopen()s SDL3 at runtime, searching @loader_path first - so SDL3 has
+	# to sit next to it in Frameworks/ or the bundled app dies at launch
+	# with "SDL3 could not be loaded". Skipped for a real SDL2 build.
+	rm -f "$(APP_BUNDLE)/Contents/Frameworks/libSDL3.dylib"
+	if strings "$(APP_BUNDLE)/Contents/Frameworks/libSDL2-2.0.0.dylib" | grep -q 'libSDL3\.dylib'; then \
+		sdl3_dylib="$$(pkg-config --variable=libdir sdl3)/libSDL3.dylib" && \
+		cp -L "$$sdl3_dylib" "$(APP_BUNDLE)/Contents/Frameworks/libSDL3.dylib" && \
+		install_name_tool -id "@executable_path/../Frameworks/libSDL3.dylib" "$(APP_BUNDLE)/Contents/Frameworks/libSDL3.dylib" && \
+		codesign --force --sign - "$(APP_BUNDLE)/Contents/Frameworks/libSDL3.dylib"; \
+	fi
 	cp assets/icon/AppIcon.icns "$(APP_BUNDLE)/Contents/Resources/AppIcon.icns"
 	sed 's/@VERSION@/$(APP_VERSION)/g' assets/icon/Info.plist > "$(APP_BUNDLE)/Contents/Info.plist"
 	rm -rf "$(APP_BUNDLE)/Contents/Resources/skin"
